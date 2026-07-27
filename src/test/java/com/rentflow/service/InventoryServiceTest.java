@@ -80,4 +80,58 @@ class InventoryServiceTest {
         verify(repository).findById("MISSING");
         verifyNoMoreInteractions(repository);
     }
+
+    @Test
+    void replacesOnlyMutableDetailsOnAnExistingItem() {
+        var item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE);
+        when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
+        var service = new InventoryService(repository);
+
+        var replaced = service.replace("DRILL-001", "Industrial drill", "Updated", InventoryStatus.UNDER_MAINTENANCE);
+
+        assertThat(replaced).isSameAs(item);
+        assertThat(item.getSerialNumber()).isEqualTo("DRILL-001");
+        assertThat(item.getType()).isEqualTo("Industrial drill");
+        assertThat(item.getName()).isEqualTo("Updated");
+        assertThat(item.getStatus()).isEqualTo(InventoryStatus.UNDER_MAINTENANCE);
+        verify(repository).findById("DRILL-001");
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void rejectsReplacementOfAMissingItemWithoutMutation() {
+        when(repository.findById("MISSING")).thenReturn(Optional.empty());
+        var service = new InventoryService(repository);
+
+        assertThatThrownBy(() -> service.replace("MISSING", "Drill", "Updated", InventoryStatus.AVAILABLE))
+                .isInstanceOf(InventoryItemNotFoundException.class);
+
+        verify(repository).findById("MISSING");
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void loadsAnExistingItemBeforeDeletingIt() {
+        var item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RETIRED);
+        when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
+        var service = new InventoryService(repository);
+
+        service.delete("DRILL-001");
+
+        var inOrder = org.mockito.Mockito.inOrder(repository);
+        inOrder.verify(repository).findById("DRILL-001");
+        inOrder.verify(repository).delete(item);
+        verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void rejectsDeletionOfAMissingItemWithoutMutation() {
+        when(repository.findById("MISSING")).thenReturn(Optional.empty());
+        var service = new InventoryService(repository);
+
+        assertThatThrownBy(() -> service.delete("MISSING")).isInstanceOf(InventoryItemNotFoundException.class);
+
+        verify(repository).findById("MISSING");
+        verifyNoMoreInteractions(repository);
+    }
 }

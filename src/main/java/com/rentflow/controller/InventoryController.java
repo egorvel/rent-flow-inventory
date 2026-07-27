@@ -19,9 +19,11 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -59,6 +61,32 @@ public class InventoryController {
                             message = "must be a valid serial number")
                     String serialNumber) {
         return converter.toResponse(service.get(serialNumber));
+    }
+
+    @PutMapping(path = "/{serialNumber}", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public InventoryItemResponse replace(
+            @PathVariable
+                    @Pattern(
+                            regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
+                            message = "must be a valid serial number")
+                    String serialNumber,
+            @Valid @RequestBody InventoryItemRequest request) {
+        if (!serialNumber.equals(request.serialNumber())) {
+            throw new RequestValidationException("serialNumber", "must match the path serial number");
+        }
+
+        return converter.toResponse(service.replace(serialNumber, request.type(), request.name(), request.status()));
+    }
+
+    @DeleteMapping("/{serialNumber}")
+    public ResponseEntity<Void> delete(
+            @PathVariable
+                    @Pattern(
+                            regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
+                            message = "must be a valid serial number")
+                    String serialNumber) {
+        service.delete(serialNumber);
+        return ResponseEntity.noContent().build();
     }
 
     @GetMapping

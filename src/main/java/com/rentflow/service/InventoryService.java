@@ -37,6 +37,21 @@ public class InventoryService {
         return repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
     }
 
+    @Transactional
+    public InventoryItem replace(String serialNumber, String type, String name, InventoryStatus status) {
+        var item =
+                repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
+        item.replaceDetails(type, name, status);
+        return item;
+    }
+
+    @Transactional
+    public void delete(String serialNumber) {
+        var item =
+                repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
+        repository.delete(item);
+    }
+
     @Transactional(readOnly = true)
     public Page<InventoryItem> list(
             int page,
