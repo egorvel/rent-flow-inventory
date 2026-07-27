@@ -4,9 +4,18 @@ import com.rentflow.converter.InventoryConverter;
 import com.rentflow.dto.InventoryItemRequest;
 import com.rentflow.dto.InventoryItemResponse;
 import com.rentflow.dto.InventoryPageResponse;
+import com.rentflow.dto.ProblemResponse;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.service.InventoryService;
 import com.rentflow.service.InventorySortField;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.headers.Header;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -16,6 +25,7 @@ import jakarta.validation.constraints.Size;
 import java.net.URI;
 import java.util.Set;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -31,6 +41,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @Validated
+@Tag(name = "Inventory")
 @RequestMapping(path = InventoryController.PATH, produces = MediaType.APPLICATION_JSON_VALUE)
 public class InventoryController {
 
@@ -46,16 +57,117 @@ public class InventoryController {
         this.converter = converter;
     }
 
+    @Operation(operationId = "createInventoryItem", summary = "Create an inventory item")
+    @ApiResponses({
+        @ApiResponse(
+                responseCode = "201",
+                description = "Inventory item created.",
+                headers =
+                        @Header(
+                                name = HttpHeaders.LOCATION,
+                                description = "Canonical path of the created inventory item.",
+                                schema = @Schema(type = "string", format = "uri")),
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                                schema = @Schema(implementation = InventoryItemResponse.class))),
+        @ApiResponse(
+                responseCode = "400",
+                description = "Request validation failed or the JSON body is malformed.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "406",
+                description = "No acceptable response representation is available.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "409",
+                description = "The serial number already exists.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "415",
+                description = "The request media type is unsupported.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "500",
+                description = "An unexpected server error occurred.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class)))
+    })
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<InventoryItemResponse> create(@Valid @RequestBody InventoryItemRequest request) {
+    public ResponseEntity<InventoryItemResponse> create(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                            description = "Complete inventory item representation.",
+                            required = true)
+                    @Valid @RequestBody
+                    InventoryItemRequest request) {
         var item = service.create(request.serialNumber(), request.type(), request.name(), request.status());
         var location = URI.create(PATH + "/" + item.getSerialNumber());
         return ResponseEntity.created(location).body(converter.toResponse(item));
     }
 
+    @Operation(operationId = "getInventoryItem", summary = "Retrieve an inventory item")
+    @ApiResponses({
+        @ApiResponse(
+                responseCode = "200",
+                description = "Inventory item found.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                                schema = @Schema(implementation = InventoryItemResponse.class))),
+        @ApiResponse(
+                responseCode = "400",
+                description = "The serial-number path value is invalid.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "404",
+                description = "The inventory item does not exist.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "406",
+                description = "No acceptable response representation is available.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "500",
+                description = "An unexpected server error occurred.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class)))
+    })
     @GetMapping("/{serialNumber}")
     public InventoryItemResponse get(
-            @PathVariable
+            @Parameter(
+                            description = "Case-sensitive inventory serial number.",
+                            required = true,
+                            schema =
+                                    @Schema(
+                                            minLength = 1,
+                                            maxLength = 64,
+                                            pattern = InventoryItemRequest.SERIAL_NUMBER_PATTERN))
+                    @PathVariable
                     @Pattern(
                             regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
                             message = "must be a valid serial number")
@@ -63,14 +175,71 @@ public class InventoryController {
         return converter.toResponse(service.get(serialNumber));
     }
 
+    @Operation(operationId = "replaceInventoryItem", summary = "Fully replace an inventory item")
+    @ApiResponses({
+        @ApiResponse(
+                responseCode = "200",
+                description = "Inventory item replaced.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                                schema = @Schema(implementation = InventoryItemResponse.class))),
+        @ApiResponse(
+                responseCode = "400",
+                description = "Request validation failed, serial numbers differ, or the JSON body is malformed.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "404",
+                description = "The inventory item does not exist.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "406",
+                description = "No acceptable response representation is available.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "415",
+                description = "The request media type is unsupported.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "500",
+                description = "An unexpected server error occurred.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class)))
+    })
     @PutMapping(path = "/{serialNumber}", consumes = MediaType.APPLICATION_JSON_VALUE)
     public InventoryItemResponse replace(
-            @PathVariable
+            @Parameter(
+                            description = "Case-sensitive inventory serial number.",
+                            required = true,
+                            schema =
+                                    @Schema(
+                                            minLength = 1,
+                                            maxLength = 64,
+                                            pattern = InventoryItemRequest.SERIAL_NUMBER_PATTERN))
+                    @PathVariable
                     @Pattern(
                             regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
                             message = "must be a valid serial number")
                     String serialNumber,
-            @Valid @RequestBody InventoryItemRequest request) {
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                            description = "Complete replacement representation with a matching serial number.",
+                            required = true)
+                    @Valid @RequestBody
+                    InventoryItemRequest request) {
         if (!serialNumber.equals(request.serialNumber())) {
             throw new RequestValidationException("serialNumber", "must match the path serial number");
         }
@@ -78,9 +247,42 @@ public class InventoryController {
         return converter.toResponse(service.replace(serialNumber, request.type(), request.name(), request.status()));
     }
 
+    @Operation(operationId = "deleteInventoryItem", summary = "Permanently delete an inventory item")
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "Inventory item permanently deleted."),
+        @ApiResponse(
+                responseCode = "400",
+                description = "The serial-number path value is invalid.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "404",
+                description = "The inventory item does not exist.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "500",
+                description = "An unexpected server error occurred.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class)))
+    })
     @DeleteMapping("/{serialNumber}")
     public ResponseEntity<Void> delete(
-            @PathVariable
+            @Parameter(
+                            description = "Case-sensitive inventory serial number.",
+                            required = true,
+                            schema =
+                                    @Schema(
+                                            minLength = 1,
+                                            maxLength = 64,
+                                            pattern = InventoryItemRequest.SERIAL_NUMBER_PATTERN))
+                    @PathVariable
                     @Pattern(
                             regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
                             message = "must be a valid serial number")
@@ -89,18 +291,84 @@ public class InventoryController {
         return ResponseEntity.noContent().build();
     }
 
+    @Operation(operationId = "listInventoryItems", summary = "List, filter, and sort inventory items")
+    @ApiResponses({
+        @ApiResponse(
+                responseCode = "200",
+                description = "Bounded inventory page returned.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                                schema = @Schema(implementation = InventoryPageResponse.class))),
+        @ApiResponse(
+                responseCode = "400",
+                description = "One or more query parameters are invalid.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "406",
+                description = "No acceptable response representation is available.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "500",
+                description = "An unexpected server error occurred.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class)))
+    })
     @GetMapping
     public InventoryPageResponse list(
-            HttpServletRequest servletRequest,
-            @RequestParam(defaultValue = "0") @Min(value = 0, message = "must be at least 0") int page,
-            @RequestParam(defaultValue = "20")
+            @Parameter(hidden = true) HttpServletRequest servletRequest,
+            @Parameter(description = "Zero-based page number.", schema = @Schema(defaultValue = "0", minimum = "0"))
+                    @RequestParam(defaultValue = "0")
+                    @Min(value = 0, message = "must be at least 0") int page,
+            @Parameter(
+                            description = "Maximum items returned per page.",
+                            schema = @Schema(defaultValue = "20", minimum = "1", maximum = "100"))
+                    @RequestParam(defaultValue = "20")
                     @Min(value = 1, message = "must be at least 1") @Max(value = 100, message = "must be at most 100") int size,
-            @RequestParam(required = false) InventoryStatus status,
-            @RequestParam(required = false)
+            @Parameter(
+                            description = "Exact inventory status filter.",
+                            schema =
+                                    @Schema(
+                                            allowableValues = {
+                                                "AVAILABLE",
+                                                "RESERVED",
+                                                "RENTED",
+                                                "INSPECTION_REQUIRED",
+                                                "UNDER_MAINTENANCE",
+                                                "RETIRED"
+                                            }))
+                    @RequestParam(required = false)
+                    InventoryStatus status,
+            @Parameter(
+                            description = "Case-insensitive exact equipment-type filter.",
+                            schema = @Schema(minLength = 1, maxLength = 100, pattern = "(?U).*\\S.*"))
+                    @RequestParam(required = false)
                     @Pattern(regexp = "(?U).*\\S.*", message = "must not be blank")
-                    @Size(max = 100, message = "must contain at most 100 characters") String type,
-            @RequestParam(defaultValue = "serialNumber") String sort,
-            @RequestParam(defaultValue = "asc") String direction) {
+                    @Size(min = 1, max = 100, message = "must contain between 1 and 100 characters") String type,
+            @Parameter(
+                            description = "Primary sort field.",
+                            schema =
+                                    @Schema(
+                                            defaultValue = "serialNumber",
+                                            allowableValues = {"serialNumber", "type", "name", "status"}))
+                    @RequestParam(defaultValue = "serialNumber")
+                    String sort,
+            @Parameter(
+                            description = "Primary sort direction, parsed case-insensitively.",
+                            schema =
+                                    @Schema(
+                                            defaultValue = "asc",
+                                            allowableValues = {"asc", "desc"}))
+                    @RequestParam(defaultValue = "asc")
+                    String direction) {
         validateCollectionParameters(servletRequest);
 
         var sortField = parseSortField(sort);
