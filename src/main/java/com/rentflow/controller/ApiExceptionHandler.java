@@ -8,6 +8,7 @@ import com.rentflow.service.InventoryItemNotFoundException;
 import jakarta.validation.ConstraintViolationException;
 import java.util.Comparator;
 import java.util.List;
+import org.springframework.beans.TypeMismatchException;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -66,6 +67,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return validationResponse(violations, request);
     }
 
+    @ExceptionHandler(RequestValidationException.class)
+    ResponseEntity<ProblemResponse> handleRequestValidation(RequestValidationException exception, WebRequest request) {
+        return validationResponse(
+                exception.getViolations().stream().sorted(VIOLATION_ORDER).toList(), request);
+    }
+
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
@@ -87,6 +94,14 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                         .map(error -> new ViolationResponse(parameterName(result), message(error))))
                 .sorted(VIOLATION_ORDER)
                 .toList();
+        return objectResponse(validationProblem(violations, request), HttpStatus.BAD_REQUEST);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleTypeMismatch(
+            TypeMismatchException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        var field = exception.getPropertyName() == null ? "request" : exception.getPropertyName();
+        var violations = List.of(new ViolationResponse(field, "must have a valid value"));
         return objectResponse(validationProblem(violations, request), HttpStatus.BAD_REQUEST);
     }
 
