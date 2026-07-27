@@ -1,6 +1,6 @@
 # Inventory Service Skeleton Design
 
-Status: Design defined; task decomposition pending.
+Status: Design and implementation tasks defined; ready for implementation.
 
 This document implements the behavior in `requirements.md`. Numbered sections are stable targets
 for task and requirements traceability.
@@ -849,6 +849,7 @@ Unit tests use JUnit Jupiter, AssertJ, and Mockito without a Spring context.
 | `InventoryConverterTest` | Exact entity-to-response and page-envelope mapping |
 | `InventoryItemTest` | Immutable serial and replaceable mutable fields |
 | `InventoryItemRequestTest` | Type/name normalization and validation profile |
+| `ApiExceptionHandlerTest` | Framework and unexpected failures mapped without a Spring context |
 
 Mockito mocks only the repository. Tests assert returned values, repository calls, state changes,
 and non-interaction on rejected operations. Assertions are not weakened to accommodate an
@@ -891,7 +892,8 @@ annotations.
 
 ### 11.4 Container smoke verification
 
-Container acceptance is verified from a clean checkout:
+The executable `scripts/container-smoke-test.sh` verifies container acceptance from a clean
+checkout:
 
 1. Validate Compose configuration and build the image.
 2. Start the stack and wait for both health checks.
@@ -902,7 +904,8 @@ Container acceptance is verified from a clean checkout:
 7. Shut down without deleting the volume, start again, and retrieve the item.
 
 These checks validate image construction, non-root execution, migration startup, health semantics,
-and volume persistence. They must not print environment secrets.
+and volume persistence. The script uses strict shell error handling, bounded health polling, and a
+cleanup trap; it must not print environment secrets.
 
 ## 12. Edge cases
 

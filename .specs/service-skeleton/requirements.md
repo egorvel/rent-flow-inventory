@@ -1,6 +1,6 @@
 # Inventory Service Skeleton Requirements
 
-Status: Requirements and design defined; task decomposition pending.
+Status: Requirements, design, and implementation tasks defined; ready for implementation.
 
 ## Context
 
@@ -310,6 +310,21 @@ so that authentication concerns do not block validation of the service skeleton.
     `design.md` §9.2 and §9.3.
 13. **Container artifact names:** The executable JAR and runtime path use Inventory-specific
     names rather than `app.jar` or `/app`. See `design.md` §9.1 and §10.2.
+14. **Planning scope:** This specification increment defines the complete implementation plan
+    without mixing application-code changes into the spec change. Implementation starts with T1.
+    See `tasks.md` §1 and §3.
+15. **Increment strategy:** Implementation proceeds through vertical increments after the build
+    and persistence foundations; implementation and its tests remain in the same commit. See
+    `tasks.md` §1 and §2.
+16. **Task granularity:** The implementation is decomposed into ten ordered tasks, each producing
+    one independently verifiable commit. See `tasks.md` §2 and §3.
+17. **Per-task verification:** Every implementation task runs `mvn -B -ntp verify` before its
+    commit; final acceptance additionally runs the clean lifecycle. See `tasks.md` §1 and T10.
+18. **Container smoke automation:** Container acceptance is encoded in the executable
+    `scripts/container-smoke-test.sh` rather than being only a manual README checklist. See
+    `design.md` §11.4 and `tasks.md` T9.
+19. **Commit guidance:** Every task records its proposed Conventional Commit title. See
+    `tasks.md` §1 and §3.
 
 The rationale and implementation mapping for every resolution is recorded in the cited design
-section.
+or task section.
