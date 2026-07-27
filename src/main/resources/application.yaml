@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: rent-flow-inventory
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  flyway:
+    create-schemas: false
+    default-schema: inventory
+    schemas: inventory
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        default_schema: inventory
+  sql:
+    init:
+      mode: never
+

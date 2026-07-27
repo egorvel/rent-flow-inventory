@@ -1,0 +1,48 @@
+package com.rentflow.model;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
+
+import java.lang.reflect.Method;
+import org.junit.jupiter.api.Test;
+
+class InventoryItemTest {
+
+    @Test
+    void keepsAssignedSerialNumberWhenDetailsAreReplaced() {
+        var item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE);
+
+        item.replaceDetails("Industrial drill", "Updated", InventoryStatus.RENTED);
+
+        assertThat(item.getSerialNumber()).isEqualTo("DRILL-001");
+        assertThat(item.getType()).isEqualTo("Industrial drill");
+        assertThat(item.getName()).isEqualTo("Updated");
+        assertThat(item.getStatus()).isEqualTo(InventoryStatus.RENTED);
+    }
+
+    @Test
+    void exposesNoSerialNumberMutator() {
+        assertThat(InventoryItem.class.getMethods()).extracting(Method::getName).doesNotContain("setSerialNumber");
+    }
+
+    @Test
+    void usesAssignedSerialNumberForEquality() {
+        var first = new InventoryItem("DRILL-001", "Drill", "First", InventoryStatus.AVAILABLE);
+        var sameIdentity = new InventoryItem("DRILL-001", "Other", "Second", InventoryStatus.RETIRED);
+        var differentIdentity = new InventoryItem("drill-001", "Drill", "First", InventoryStatus.AVAILABLE);
+
+        assertThat(first).isEqualTo(sameIdentity).hasSameHashCodeAs(sameIdentity);
+        assertThat(first).isNotEqualTo(differentIdentity);
+    }
+
+    @Test
+    void requiresEveryConstructorAndReplacementValue() {
+        assertThatNullPointerException()
+                .isThrownBy(() -> new InventoryItem(null, "Drill", "Name", InventoryStatus.AVAILABLE));
+        assertThatNullPointerException()
+                .isThrownBy(() -> new InventoryItem("DRILL-001", null, "Name", InventoryStatus.AVAILABLE));
+        assertThatNullPointerException()
+                .isThrownBy(() -> new InventoryItem("DRILL-001", "Drill", null, InventoryStatus.AVAILABLE));
+        assertThatNullPointerException().isThrownBy(() -> new InventoryItem("DRILL-001", "Drill", "Name", null));
+    }
+}
