@@ -1,0 +1,39 @@
+services:
+  rentflow-postgres:
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rentflow}
+      POSTGRES_USER: ${POSTGRES_USER:-rentflow_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rentflow-admin-local}
+      INVENTORY_DB_USER: ${INVENTORY_DB_USER:-inventory}
+      INVENTORY_DB_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-local}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - rentflow-postgres-data:/var/lib/postgresql
+      - ./docker/postgres/init-inventory.sh:/docker-entrypoint-initdb.d/init-inventory.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --username "$${POSTGRES_USER}" --dbname "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  inventory:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://rentflow-postgres:5432/${POSTGRES_DB:-rentflow}
+      SPRING_DATASOURCE_USERNAME: ${INVENTORY_DB_USER:-inventory}
+      SPRING_DATASOURCE_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-local}
+    depends_on:
+      rentflow-postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+volumes:
+  rentflow-postgres-data:
