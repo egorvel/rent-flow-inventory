@@ -3,6 +3,11 @@
 **Domain:**
 Inventory service. Owns the equipment catalogue.
 
+**Database topology:**
+- RentFlow microservices share the PostgreSQL database `rentflow` at this stage.
+- The inventory service connects with the `inventory` role and owns only the `inventory` schema
+  and its tables.
+
 **Inventory Entity**
 - Serial Number – unique, manually assigned.
 - Type – category of the equipment or type (e.g., "Industrial drill", "Concrete mixer", "Jackhammer").
@@ -20,7 +25,7 @@ Inventory service. Owns the equipment catalogue.
 
 ## Invariants
 
-- **Before declaring done: run `mvn -B -ntp verify` locally and confirm `BUILD SUCCESS`.** Do not split this into "just the tests" or "just compile". If Spotless fails, run `mvn spotless:apply` and re-run `verify`. Never skip with `-DskipTests`, `-Dspotless.check.skip`, or similar flags.
+- **Before declaring done: run `mvn -B -ntp clean verify` locally and confirm `BUILD SUCCESS`.** Do not split this into "just the tests" or "just compile". If Spotless fails, run `mvn spotless:apply` and re-run `verify`. Never skip with `-DskipTests`, `-Dspotless.check.skip`, or similar flags.
 - Prefer existing project patterns over new abstractions. Before adding a new abstraction, dependency, folder, framework, or test style, search for an existing equivalent in the repo.
 - Make the smallest change that correctly solves the task. Do not refactor unrelated code, reformat entire files, rename public APIs, or clean up nearby code unless the task explicitly asks for it.
 - Do not make tests pass by weakening assertions, deleting tests, ignoring exceptions, increasing timeouts blindly, or suppressing errors. If a test is wrong, explain why and update it to assert the correct behavior.
@@ -30,12 +35,19 @@ Inventory service. Owns the equipment catalogue.
 
 **Technology requirements:**
 - Java 25, Spring Boot 4, Maven
-- PostgreSQL 18.3, Flyway
+- PostgreSQL 18.4, Flyway
 - Spring Data JPA (Hibernate) for persistence
 - Testcontainers
 
 **Persistence conventions:**
-- Schema changes go through Flyway migrations (`src/main/resources/db/migration/V{n}__description.sql` or `src/main/java/com/rentflow/db/migration/V{n}__description.java`).
+- The `rentflow` database, `inventory` login role, and role-owned `inventory` schema are
+  platform-provisioned prerequisites; the local Compose bootstrap may provide them for
+  development.
+- Inventory migrations and Flyway history are confined to the `inventory` schema; they must not
+  modify objects owned by another RentFlow service.
+- Changes to Inventory-owned tables, indexes, constraints, and other application objects go
+  through Flyway migrations (`src/main/resources/db/migration/V{n}__description.sql` or
+  `src/main/java/com/rentflow/db/migration/V{n}__description.java`).
 - Migrations are append-only too: never edit a shipped migration — add a new one.
 
 **Testing conventions:**
