@@ -17,13 +17,18 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.method.ParameterValidationResult;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import tools.jackson.databind.exc.InvalidFormatException;
 
 @RestControllerAdvice
@@ -125,6 +130,101 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         return objectResponse(problem, HttpStatus.BAD_REQUEST);
     }
 
+    @Override
+    protected ResponseEntity<Object> handleHttpRequestMethodNotSupported(
+            HttpRequestMethodNotSupportedException exception,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request) {
+        var problem = problem(
+                HttpStatus.METHOD_NOT_ALLOWED,
+                "urn:rentflow:problem:method-not-allowed",
+                "Method not allowed",
+                "The HTTP method is not supported for this resource.",
+                "METHOD_NOT_ALLOWED",
+                request,
+                List.of());
+        return objectResponse(problem, status, headers);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleHttpMediaTypeNotAcceptable(
+            HttpMediaTypeNotAcceptableException exception,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request) {
+        var problem = problem(
+                HttpStatus.NOT_ACCEPTABLE,
+                "urn:rentflow:problem:not-acceptable",
+                "Not acceptable",
+                "No acceptable response representation is available.",
+                "NOT_ACCEPTABLE",
+                request,
+                List.of());
+        return objectResponse(problem, status, headers);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleHttpMediaTypeNotSupported(
+            HttpMediaTypeNotSupportedException exception,
+            HttpHeaders headers,
+            HttpStatusCode status,
+            WebRequest request) {
+        var problem = problem(
+                HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+                "urn:rentflow:problem:unsupported-media-type",
+                "Unsupported media type",
+                "The request media type is not supported.",
+                "UNSUPPORTED_MEDIA_TYPE",
+                request,
+                List.of());
+        return objectResponse(problem, status, headers);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleNoResourceFoundException(
+            NoResourceFoundException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        return resourceNotFound(status, headers, request);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleNoHandlerFoundException(
+            NoHandlerFoundException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        return resourceNotFound(status, headers, request);
+    }
+
+    @Override
+    protected ResponseEntity<Object> handleExceptionInternal(
+            Exception exception, Object body, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+        if (status.is4xxClientError()) {
+            var problem = problem(
+                    status,
+                    "urn:rentflow:problem:http-error",
+                    "Request failed",
+                    "The request could not be processed.",
+                    "HTTP_ERROR",
+                    request,
+                    List.of());
+            return objectResponse(problem, status, headers);
+        }
+        return objectResponse(internalError(request), HttpStatus.INTERNAL_SERVER_ERROR, headers);
+    }
+
+    @ExceptionHandler(Exception.class)
+    ResponseEntity<ProblemResponse> handleUnexpected(Exception exception, WebRequest request) {
+        var servletRequest = ((ServletWebRequest) request).getRequest();
+        logger.error("Unexpected failure handling "
+                + servletRequest.getMethod()
+                + " "
+                + servletRequest.getRequestURI()
+                + " ("
+                + exception.getClass().getName()
+                + ")");
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(internalError(request));
+    }
+
     private ResponseEntity<ProblemResponse> validationResponse(List<ViolationResponse> violations, WebRequest request) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
@@ -161,8 +261,38 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 .body(problem);
     }
 
+    private ResponseEntity<Object> objectResponse(ProblemResponse problem, HttpStatusCode status, HttpHeaders headers) {
+        return ResponseEntity.status(status)
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
+    }
+
+    private ResponseEntity<Object> resourceNotFound(HttpStatusCode status, HttpHeaders headers, WebRequest request) {
+        var problem = problem(
+                HttpStatus.NOT_FOUND,
+                "urn:rentflow:problem:resource-not-found",
+                "Resource not found",
+                "The requested resource was not found.",
+                "RESOURCE_NOT_FOUND",
+                request,
+                List.of());
+        return objectResponse(problem, status, headers);
+    }
+
+    private ProblemResponse internalError(WebRequest request) {
+        return problem(
+                HttpStatus.INTERNAL_SERVER_ERROR,
+                "urn:rentflow:problem:internal-error",
+                "Internal server error",
+                "An unexpected error occurred.",
+                "INTERNAL_ERROR",
+                request,
+                List.of());
+    }
+
     private ProblemResponse problem(
-            HttpStatus status,
+            HttpStatusCode status,
             String type,
             String title,
             String detail,

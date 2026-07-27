@@ -164,6 +164,13 @@
                                 <requireMavenVersion>
                                     <version>[3.9.0,4.0.0)</version>
                                 </requireMavenVersion>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>org.springframework.boot:spring-boot-starter-security</exclude>
+                                        <exclude>org.springframework.security:*</exclude>
+                                    </excludes>
+                                    <searchTransitive>true</searchTransitive>
+                                </bannedDependencies>
                             </rules>
                         </configuration>
                     </execution>
@@ -196,4 +203,3 @@
         </plugins>
     </build>
 </project>
-
