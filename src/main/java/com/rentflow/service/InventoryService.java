@@ -39,11 +39,12 @@ public class InventoryService {
     }
 
     @Transactional
-    public InventoryItem replace(String serialNumber, String type, String name, InventoryStatus status) {
-        var item =
-                repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
-        item.replaceDetails(type, name, status);
-        return item;
+    public InventoryItem replace(InventoryItem item) {
+        InventoryItem resultItem = repository
+                .findById(item.getSerialNumber())
+                .orElseThrow(() -> new InventoryItemNotFoundException(item.getSerialNumber()));
+        resultItem.replaceDetails(item);
+        return resultItem;
     }
 
     @Transactional

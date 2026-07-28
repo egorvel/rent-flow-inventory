@@ -90,7 +90,9 @@ class InventoryServiceTest {
         when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
         var service = new InventoryService(repository);
 
-        var replaced = service.replace("DRILL-001", "Industrial drill", "Updated", InventoryStatus.UNDER_MAINTENANCE);
+        InventoryItem toReplace =
+                new InventoryItem("DRILL-001", "Industrial drill", "Updated", InventoryStatus.UNDER_MAINTENANCE);
+        var replaced = service.replace(toReplace);
 
         assertThat(replaced).isSameAs(item);
         assertThat(item.getSerialNumber()).isEqualTo("DRILL-001");
@@ -106,8 +108,8 @@ class InventoryServiceTest {
         when(repository.findById("MISSING")).thenReturn(Optional.empty());
         var service = new InventoryService(repository);
 
-        assertThatThrownBy(() -> service.replace("MISSING", "Drill", "Updated", InventoryStatus.AVAILABLE))
-                .isInstanceOf(InventoryItemNotFoundException.class);
+        InventoryItem item = new InventoryItem("MISSING", "Drill", "Updated", InventoryStatus.AVAILABLE);
+        assertThatThrownBy(() -> service.replace(item)).isInstanceOf(InventoryItemNotFoundException.class);
 
         verify(repository).findById("MISSING");
         verifyNoMoreInteractions(repository);

@@ -49,6 +49,10 @@ public class InventoryItem {
         return status;
     }
 
+    public void replaceDetails(InventoryItem item) {
+        replaceDetails(item.getType(), item.getName(), item.getStatus());
+    }
+
     public void replaceDetails(String type, String name, InventoryStatus status) {
         this.type = Objects.requireNonNull(type, "type must not be null");
         this.name = Objects.requireNonNull(name, "name must not be null");

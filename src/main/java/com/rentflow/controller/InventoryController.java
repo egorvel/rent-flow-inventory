@@ -240,8 +240,8 @@ public class InventoryController {
         if (!serialNumber.equals(request.serialNumber())) {
             throw new RequestValidationException("serialNumber", "must match the path serial number");
         }
-
-        return converter.toResponse(service.replace(serialNumber, request.type(), request.name(), request.status()));
+        InventoryItem item = converter.toModel(request);
+        return converter.toResponse(service.replace(item));
     }
 
     @Operation(operationId = "deleteInventoryItem", summary = "Permanently delete an inventory item")
