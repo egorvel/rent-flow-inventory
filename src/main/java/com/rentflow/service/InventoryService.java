@@ -1,5 +1,7 @@
 package com.rentflow.service;
 
+import java.util.ArrayList;
+
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -49,7 +51,7 @@ public class InventoryService {
 
     @Transactional
     public void delete(String serialNumber) {
-        var item =
+        InventoryItem item =
                 repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
         repository.delete(item);
     }
@@ -62,7 +64,7 @@ public class InventoryService {
             String type,
             InventorySortField sortField,
             Sort.Direction direction) {
-        var orders = new java.util.ArrayList<Sort.Order>();
+        ArrayList<Sort.Order> orders = new java.util.ArrayList<>();
         orders.add(new Sort.Order(direction, sortField.entityAttribute()));
         if (sortField != InventorySortField.SERIAL_NUMBER) {
             orders.add(Sort.Order.asc("serialNumber"));

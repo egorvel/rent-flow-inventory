@@ -365,9 +365,9 @@ public class InventoryController {
                     String direction) {
         validateCollectionParameters(servletRequest);
 
-        var sortField = parseSortField(sort);
-        var sortDirection = parseDirection(direction);
-        var normalizedType = type == null ? null : type.strip();
+        InventorySortField sortField = parseSortField(sort);
+        Sort.Direction sortDirection = parseDirection(direction);
+        String normalizedType = type == null ? null : type.strip();
         return converter.toPageResponse(service.list(page, size, status, normalizedType, sortField, sortDirection));
     }
 
