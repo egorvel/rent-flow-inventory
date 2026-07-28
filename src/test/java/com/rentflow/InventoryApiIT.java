@@ -138,7 +138,7 @@ class InventoryApiIT extends PostgresIntegrationTest {
                 .andExpect(jsonPath("$.name").value("Updated drill"))
                 .andExpect(jsonPath("$.status").value("UNDER_MAINTENANCE"));
 
-        var persisted = repository.findById("DRILL-001").orElseThrow();
+        InventoryItem persisted = repository.findById("DRILL-001").orElseThrow();
         org.assertj.core.api.Assertions.assertThat(persisted.getSerialNumber()).isEqualTo("DRILL-001");
         org.assertj.core.api.Assertions.assertThat(persisted.getType()).isEqualTo("Industrial drill");
         org.assertj.core.api.Assertions.assertThat(persisted.getName()).isEqualTo("Updated drill");
@@ -147,8 +147,8 @@ class InventoryApiIT extends PostgresIntegrationTest {
 
     @Test
     void acceptsEveryDefinedStatusFromEveryPriorStatus() throws Exception {
-        for (var priorStatus : InventoryStatus.values()) {
-            for (var replacementStatus : InventoryStatus.values()) {
+        for (InventoryStatus priorStatus : InventoryStatus.values()) {
+            for (InventoryStatus replacementStatus : InventoryStatus.values()) {
                 repository.deleteAllInBatch();
                 repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Original", priorStatus));
 
@@ -178,7 +178,7 @@ class InventoryApiIT extends PostgresIntegrationTest {
                 """);
         assertInvalidReplacement("{");
 
-        var persisted = repository.findById("DRILL-001").orElseThrow();
+        InventoryItem persisted = repository.findById("DRILL-001").orElseThrow();
         org.assertj.core.api.Assertions.assertThat(persisted.getType()).isEqualTo("Drill");
         org.assertj.core.api.Assertions.assertThat(persisted.getName()).isEqualTo("Original");
         org.assertj.core.api.Assertions.assertThat(persisted.getStatus()).isEqualTo(InventoryStatus.RESERVED);
@@ -199,7 +199,7 @@ class InventoryApiIT extends PostgresIntegrationTest {
 
     @Test
     void permanentlyDeletesItemsInEveryStatusAndRejectsMissingDeletes() throws Exception {
-        for (var inventoryStatus : InventoryStatus.values()) {
+        for (InventoryStatus inventoryStatus : InventoryStatus.values()) {
             repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Name", inventoryStatus));
 
             mockMvc.perform(delete("/api/v1/inventory/DRILL-001"))

@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -43,7 +44,7 @@ class OpenApiIT extends PostgresIntegrationTest {
 
     @BeforeEach
     void loadOpenApiDocument() throws Exception {
-        var response = mockMvc.perform(get("/v3/api-docs"))
+        MockHttpServletResponse response = mockMvc.perform(get("/v3/api-docs"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andReturn()
@@ -58,7 +59,7 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(document.at("/info/version").asString()).isEqualTo("v1");
         assertThat(document.path("tags").get(0).path("name").asString()).isEqualTo("Inventory");
 
-        var paths = document.path("paths");
+        JsonNode paths = document.path("paths");
         assertThat(names(paths)).containsExactlyInAnyOrder("/api/v1/inventory", "/api/v1/inventory/{serialNumber}");
         assertThat(operation("/api/v1/inventory", "post").path("operationId").asString())
                 .isEqualTo("createInventoryItem");
@@ -85,7 +86,7 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(document.at("/components/securitySchemes").isMissingNode()
                         || document.at("/components/securitySchemes").isEmpty())
                 .isTrue();
-        for (var operation : operations()) {
+        for (JsonNode operation : operations()) {
             assertThat(operation.has("security")).isFalse();
         }
     }
@@ -96,8 +97,8 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(texts(schema("InventoryItemDTO").path("required")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_FIELDS);
 
-        var requestProperties = schema("InventoryItemDTO").path("properties");
-        var serialNumber = resolved(requestProperties.path("serialNumber"));
+        JsonNode requestProperties = schema("InventoryItemDTO").path("properties");
+        JsonNode serialNumber = resolved(requestProperties.path("serialNumber"));
         assertThat(serialNumber.path("minLength").asInt()).isEqualTo(1);
         assertThat(serialNumber.path("maxLength").asInt()).isEqualTo(64);
         assertThat(serialNumber.path("pattern").asString()).isEqualTo(InventoryItemDTO.SERIAL_NUMBER_PATTERN);
@@ -126,7 +127,7 @@ class OpenApiIT extends PostgresIntegrationTest {
 
     @Test
     void documentsPaginationFiltersSortingAndRequestBodies() {
-        var list = operation("/api/v1/inventory", "get");
+        JsonNode list = operation("/api/v1/inventory", "get");
         assertThat(parameterNames(list))
                 .containsExactlyInAnyOrder("page", "size", "status", "type", "sort", "direction");
 
@@ -154,8 +155,8 @@ class OpenApiIT extends PostgresIntegrationTest {
                 .isEqualTo("asc");
         assertThat(enumValues(parameter(list, "direction").path("schema"))).containsExactlyInAnyOrder("asc", "desc");
 
-        for (var method : List.of("get", "put", "delete")) {
-            var serialParameter = parameter(operation("/api/v1/inventory/{serialNumber}", method), "serialNumber");
+        for (String method : List.of("get", "put", "delete")) {
+            JsonNode serialParameter = parameter(operation("/api/v1/inventory/{serialNumber}", method), "serialNumber");
             assertThat(serialParameter.path("required").asBoolean()).isTrue();
             assertThat(resolved(serialParameter.path("schema")).path("pattern").asString())
                     .isEqualTo(InventoryItemDTO.SERIAL_NUMBER_PATTERN);
@@ -167,25 +168,25 @@ class OpenApiIT extends PostgresIntegrationTest {
 
     @Test
     void documentsSuccessAndApplicableProblemResponses() {
-        var create = operation("/api/v1/inventory", "post");
+        JsonNode create = operation("/api/v1/inventory", "post");
         assertResponseCodes(create, "201", "400", "406", "409", "415", "500");
         assertResponseSchema(create, "201", MediaType.APPLICATION_JSON_VALUE, "InventoryItemDTO");
         assertThat(create.at("/responses/201/headers/Location/schema/format").asString())
                 .isEqualTo("uri");
 
-        var list = operation("/api/v1/inventory", "get");
+        JsonNode list = operation("/api/v1/inventory", "get");
         assertResponseCodes(list, "200", "400", "406", "500");
         assertResponseSchema(list, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryPageResponse");
 
-        var get = operation("/api/v1/inventory/{serialNumber}", "get");
+        JsonNode get = operation("/api/v1/inventory/{serialNumber}", "get");
         assertResponseCodes(get, "200", "400", "404", "406", "500");
         assertResponseSchema(get, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryItemDTO");
 
-        var replace = operation("/api/v1/inventory/{serialNumber}", "put");
+        JsonNode replace = operation("/api/v1/inventory/{serialNumber}", "put");
         assertResponseCodes(replace, "200", "400", "404", "406", "415", "500");
         assertResponseSchema(replace, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryItemDTO");
 
-        var delete = operation("/api/v1/inventory/{serialNumber}", "delete");
+        JsonNode delete = operation("/api/v1/inventory/{serialNumber}", "delete");
         assertResponseCodes(delete, "204", "400", "404", "500");
         assertThat(delete.at("/responses/204").has("content")).isFalse();
 
@@ -198,17 +199,17 @@ class OpenApiIT extends PostgresIntegrationTest {
 
     @Test
     void publishesSchemaConformingExamplesAndInteractiveSwaggerUi() throws Exception {
-        var inventoryExample = schemaExample("InventoryItemDTO");
+        JsonNode inventoryExample = schemaExample("InventoryItemDTO");
         assertExampleMatchesSchema(inventoryExample, schema("InventoryItemDTO"));
         assertThat(inventoryExample.path("serialNumber").asString()).isEqualTo("DRILL-001");
         assertThat(inventoryExample.path("status").asString()).isEqualTo("AVAILABLE");
 
-        var problemExample = schemaExample("ProblemResponse");
+        JsonNode problemExample = schemaExample("ProblemResponse");
         assertExampleMatchesSchema(problemExample, schema("ProblemResponse"));
         assertThat(problemExample.path("type").asString()).isEqualTo("urn:rentflow:problem:validation-failed");
         assertThat(problemExample.path("code").asString()).isEqualTo("VALIDATION_FAILED");
 
-        var redirect = mockMvc.perform(get("/swagger-ui.html"))
+        String redirect = mockMvc.perform(get("/swagger-ui.html"))
                 .andExpect(status().is3xxRedirection())
                 .andReturn()
                 .getResponse()
@@ -245,27 +246,27 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private Set<String> texts(JsonNode array) {
-        var values = new LinkedHashSet<String>();
+        Set<String> values = new LinkedHashSet<>();
         array.forEach(node -> values.add(node.asString()));
         return values;
     }
 
     private Set<String> enumValues(JsonNode rawSchema) {
-        var valueSchema = resolved(rawSchema);
-        var values = texts(valueSchema.path("enum"));
-        for (var composition : List.of("allOf", "oneOf", "anyOf")) {
+        JsonNode valueSchema = resolved(rawSchema);
+        Set<String> values = texts(valueSchema.path("enum"));
+        for (String composition : List.of("allOf", "oneOf", "anyOf")) {
             valueSchema.path(composition).forEach(schema -> values.addAll(enumValues(schema)));
         }
         return values;
     }
 
     private JsonNode resolved(JsonNode schema) {
-        var reference = schema.path("$ref").asString();
+        String reference = schema.path("$ref").asString();
         return reference.isEmpty() ? schema : document.at(reference.substring(1));
     }
 
     private Set<String> parameterNames(JsonNode operation) {
-        var names = new LinkedHashSet<String>();
+        Set<String> names = new LinkedHashSet<>();
         operation
                 .path("parameters")
                 .forEach(parameter -> names.add(parameter.path("name").asString()));
@@ -273,7 +274,7 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private JsonNode parameter(JsonNode operation, String name) {
-        for (var parameter : operation.path("parameters")) {
+        for (JsonNode parameter : operation.path("parameters")) {
             if (name.equals(parameter.path("name").asString())) {
                 return parameter;
             }
@@ -282,7 +283,7 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private void assertParameter(JsonNode parameter, String defaultValue, String minimum, String maximum) {
-        var parameterSchema = resolved(parameter.path("schema"));
+        JsonNode parameterSchema = resolved(parameter.path("schema"));
         assertThat(parameterSchema.path("default").asString()).isEqualTo(defaultValue);
         assertThat(parameterSchema.path("minimum").asString()).isEqualTo(minimum);
         if (maximum == null) {
@@ -305,7 +306,7 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private void assertResponseSchema(JsonNode operation, String status, String mediaType, String schemaName) {
-        var escapedMediaType = mediaType.replace("/", "~1");
+        String escapedMediaType = mediaType.replace("/", "~1");
         assertThat(operation
                         .at("/responses/" + status + "/content/" + escapedMediaType + "/schema/$ref")
                         .asString())
@@ -313,13 +314,13 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private void assertProblemSchemas(JsonNode operation, Set<String> responseCodes) {
-        for (var responseCode : responseCodes) {
+        for (String responseCode : responseCodes) {
             assertResponseSchema(operation, responseCode, MediaType.APPLICATION_PROBLEM_JSON_VALUE, "ProblemResponse");
         }
     }
 
     private JsonNode schemaExample(String schemaName) throws Exception {
-        var example = schema(schemaName).path("example");
+        JsonNode example = schema(schemaName).path("example");
         if (example.isMissingNode() && schema(schemaName).path("examples").isArray()) {
             example = schema(schemaName).path("examples").get(0);
         }
@@ -331,7 +332,7 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private void assertExampleMatchesSchema(JsonNode example, JsonNode rawSchema) {
-        var exampleSchema = resolved(rawSchema);
+        JsonNode exampleSchema = resolved(rawSchema);
         if (exampleSchema.has("properties")) {
             assertThat(example.isObject()).isTrue();
             assertThat(names(example)).isSubsetOf(names(exampleSchema.path("properties")));
@@ -351,7 +352,7 @@ class OpenApiIT extends PostgresIntegrationTest {
         }
         if ("string".equals(exampleSchema.path("type").asString())) {
             assertThat(example.isString()).isTrue();
-            var allowedValues = enumValues(exampleSchema);
+            Set<String> allowedValues = enumValues(exampleSchema);
             if (!allowedValues.isEmpty()) {
                 assertThat(allowedValues).contains(example.asString());
             }

@@ -2,6 +2,7 @@ package com.rentflow.controller;
 
 import java.util.Comparator;
 import java.util.List;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 
 import org.springframework.beans.TypeMismatchException;
@@ -67,7 +68,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(ConstraintViolationException.class)
     ResponseEntity<ProblemResponse> handleConstraintViolation(
             ConstraintViolationException exception, WebRequest request) {
-        var violations = exception.getConstraintViolations().stream()
+        List<ViolationResponse> violations = exception.getConstraintViolations().stream()
                 .map(violation -> new ViolationResponse(
                         finalPathSegment(violation.getPropertyPath().toString()), violation.getMessage()))
                 .sorted(VIOLATION_ORDER)
@@ -84,7 +85,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @Override
     protected ResponseEntity<Object> handleMethodArgumentNotValid(
             MethodArgumentNotValidException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
-        var violations = exception.getBindingResult().getFieldErrors().stream()
+        List<ViolationResponse> violations = exception.getBindingResult().getFieldErrors().stream()
                 .map(error -> new ViolationResponse(error.getField(), error.getDefaultMessage()))
                 .sorted(VIOLATION_ORDER)
                 .toList();
@@ -97,7 +98,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             HttpHeaders headers,
             HttpStatusCode status,
             WebRequest request) {
-        var violations = exception.getParameterValidationResults().stream()
+        List<ViolationResponse> violations = exception.getParameterValidationResults().stream()
                 .flatMap(result -> result.getResolvableErrors().stream()
                         .map(error -> new ViolationResponse(parameterName(result), message(error))))
                 .sorted(VIOLATION_ORDER)
@@ -108,21 +109,22 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @Override
     protected ResponseEntity<Object> handleTypeMismatch(
             TypeMismatchException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
-        var field = exception.getPropertyName() == null ? "request" : exception.getPropertyName();
-        var violations = List.of(new ViolationResponse(field, "must have a valid value"));
+        String field = exception.getPropertyName() == null ? "request" : exception.getPropertyName();
+        List<ViolationResponse> violations = List.of(new ViolationResponse(field, "must have a valid value"));
         return objectResponse(validationProblem(violations, request), HttpStatus.BAD_REQUEST);
     }
 
     @Override
     protected ResponseEntity<Object> handleHttpMessageNotReadable(
             HttpMessageNotReadableException exception, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
-        var invalidFormat = findCause(exception, InvalidFormatException.class);
+        InvalidFormatException invalidFormat = findCause(exception, InvalidFormatException.class);
         if (invalidFormat != null && invalidFormat.getTargetType() == InventoryStatus.class) {
-            var violations = List.of(new ViolationResponse("status", "must be a defined inventory status"));
+            List<ViolationResponse> violations =
+                    List.of(new ViolationResponse("status", "must be a defined inventory status"));
             return objectResponse(validationProblem(violations, request), HttpStatus.BAD_REQUEST);
         }
 
-        var problem = problem(
+        ProblemResponse problem = problem(
                 HttpStatus.BAD_REQUEST,
                 "urn:rentflow:problem:malformed-json",
                 "Malformed JSON",
@@ -139,7 +141,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             HttpHeaders headers,
             HttpStatusCode status,
             WebRequest request) {
-        var problem = problem(
+        ProblemResponse problem = problem(
                 HttpStatus.METHOD_NOT_ALLOWED,
                 "urn:rentflow:problem:method-not-allowed",
                 "Method not allowed",
@@ -156,7 +158,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             HttpHeaders headers,
             HttpStatusCode status,
             WebRequest request) {
-        var problem = problem(
+        ProblemResponse problem = problem(
                 HttpStatus.NOT_ACCEPTABLE,
                 "urn:rentflow:problem:not-acceptable",
                 "Not acceptable",
@@ -173,7 +175,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
             HttpHeaders headers,
             HttpStatusCode status,
             WebRequest request) {
-        var problem = problem(
+        ProblemResponse problem = problem(
                 HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                 "urn:rentflow:problem:unsupported-media-type",
                 "Unsupported media type",
@@ -200,7 +202,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     protected ResponseEntity<Object> handleExceptionInternal(
             Exception exception, Object body, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
         if (status.is4xxClientError()) {
-            var problem = problem(
+            ProblemResponse problem = problem(
                     status,
                     "urn:rentflow:problem:http-error",
                     "Request failed",
@@ -215,7 +217,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     ResponseEntity<ProblemResponse> handleUnexpected(Exception exception, WebRequest request) {
-        var servletRequest = ((ServletWebRequest) request).getRequest();
+        HttpServletRequest servletRequest = ((ServletWebRequest) request).getRequest();
         logger.error("Unexpected failure handling "
                 + servletRequest.getMethod()
                 + " "
@@ -272,7 +274,7 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     private ResponseEntity<Object> resourceNotFound(HttpStatusCode status, HttpHeaders headers, WebRequest request) {
-        var problem = problem(
+        ProblemResponse problem = problem(
                 HttpStatus.NOT_FOUND,
                 "urn:rentflow:problem:resource-not-found",
                 "Resource not found",
@@ -310,22 +312,22 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     private String parameterName(ParameterValidationResult result) {
-        var name = result.getMethodParameter().getParameterName();
+        String name = result.getMethodParameter().getParameterName();
         return name == null ? "request" : name;
     }
 
     private String message(MessageSourceResolvable error) {
-        var message = error.getDefaultMessage();
+        String message = error.getDefaultMessage();
         return message == null ? "is invalid" : message;
     }
 
     private String finalPathSegment(String path) {
-        var separator = path.lastIndexOf('.');
+        int separator = path.lastIndexOf('.');
         return separator < 0 ? path : path.substring(separator + 1);
     }
 
     private <T extends Throwable> T findCause(Throwable throwable, Class<T> type) {
-        var current = throwable;
+        Throwable current = throwable;
         while (current != null) {
             if (type.isInstance(current)) {
                 return type.cast(current);

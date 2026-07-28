@@ -2,9 +2,11 @@ package com.rentflow;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.MethodOrderer;
@@ -99,7 +101,7 @@ class HealthIT {
     @Order(2)
     void failedSchemaValidationPreventsAnAcceptingApplicationContext() {
         assertThatThrownBy(() -> {
-                    try (var ignored = startApplication(Map.of(
+                    try (AutoCloseable ignored = startApplication(Map.of(
                             "spring.flyway.default-schema", "missing_inventory",
                             "spring.flyway.schemas", "missing_inventory",
                             "spring.jpa.properties.hibernate.default_schema", "missing_inventory"))) {
@@ -153,8 +155,8 @@ class HealthIT {
     }
 
     private void awaitStatus(String path, int expectedStatus) throws Exception {
-        var deadline = System.nanoTime() + HEALTH_TRANSITION_TIMEOUT.toNanos();
-        var actualStatus = -1;
+        long deadline = System.nanoTime() + HEALTH_TRANSITION_TIMEOUT.toNanos();
+        int actualStatus = -1;
 
         do {
             actualStatus = mockMvc.perform(get(path)).andReturn().getResponse().getStatus();
@@ -198,7 +200,7 @@ class HealthIT {
     }
 
     private void awaitDatabaseAvailable() throws Exception {
-        var deadline = System.nanoTime() + HEALTH_TRANSITION_TIMEOUT.toNanos();
+        long deadline = System.nanoTime() + HEALTH_TRANSITION_TIMEOUT.toNanos();
         do {
             if (databaseAcceptsConnections()) {
                 return;
@@ -215,7 +217,7 @@ class HealthIT {
         if (!POSTGRES.isRunning()) {
             return false;
         }
-        try (var connection =
+        try (Connection connection =
                 DriverManager.getConnection(POSTGRES.getJdbcUrl(), INVENTORY_USERNAME, INVENTORY_PASSWORD)) {
             return connection.isValid(1);
         } catch (SQLException exception) {
@@ -224,7 +226,7 @@ class HealthIT {
     }
 
     private AutoCloseable startApplication(Map<String, Object> overrides) {
-        var properties = new java.util.HashMap<String, Object>();
+        HashMap<String, Object> properties = new HashMap<>();
         properties.put("spring.datasource.url", POSTGRES.getJdbcUrl());
         properties.put("spring.datasource.username", INVENTORY_USERNAME);
         properties.put("spring.datasource.password", INVENTORY_PASSWORD);
@@ -232,7 +234,7 @@ class HealthIT {
         properties.put("spring.main.banner-mode", "off");
         properties.put("logging.level.root", "OFF");
         properties.putAll(overrides);
-        var arguments = properties.entrySet().stream()
+        String[] arguments = properties.entrySet().stream()
                 .map(entry -> "--" + entry.getKey() + "=" + entry.getValue())
                 .toArray(String[]::new);
 
@@ -242,7 +244,7 @@ class HealthIT {
     }
 
     private static int availablePort() {
-        try (var socket = new ServerSocket(0)) {
+        try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
         } catch (IOException exception) {
             throw new IllegalStateException("Could not reserve a host port for PostgreSQL", exception);

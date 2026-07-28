@@ -7,6 +7,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 
 import com.rentflow.dto.InventoryItemDTO;
+import com.rentflow.dto.InventoryPageResponse;
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
 
@@ -18,7 +19,7 @@ class InventoryConverterTest {
 
     @Test
     void mapsEveryBusinessField() {
-        var item = new InventoryItem("DRILL-001", "Industrial drill", "Bosch GBH", InventoryStatus.AVAILABLE);
+        InventoryItem item = new InventoryItem("DRILL-001", "Industrial drill", "Bosch GBH", InventoryStatus.AVAILABLE);
 
         assertThat(converter.toResponse(item))
                 .isEqualTo(
@@ -27,10 +28,10 @@ class InventoryConverterTest {
 
     @Test
     void mapsPageContentAndMetadata() {
-        var item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
-        var page = new PageImpl<>(List.of(item), PageRequest.of(2, 1), 4);
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
+        PageImpl<InventoryItem> page = new PageImpl<>(List.of(item), PageRequest.of(2, 1), 4);
 
-        var response = converter.toPageResponse(page);
+        InventoryPageResponse response = converter.toPageResponse(page);
 
         assertThat(response.items()).containsExactly(converter.toResponse(item));
         assertThat(response.page()).isEqualTo(2);

@@ -11,7 +11,7 @@ class InventoryItemTest {
 
     @Test
     void keepsAssignedSerialNumberWhenDetailsAreReplaced() {
-        var item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE);
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE);
 
         item.replaceDetails("Industrial drill", "Updated", InventoryStatus.RENTED);
 
@@ -28,9 +28,9 @@ class InventoryItemTest {
 
     @Test
     void usesAssignedSerialNumberForEquality() {
-        var first = new InventoryItem("DRILL-001", "Drill", "First", InventoryStatus.AVAILABLE);
-        var sameIdentity = new InventoryItem("DRILL-001", "Other", "Second", InventoryStatus.RETIRED);
-        var differentIdentity = new InventoryItem("drill-001", "Drill", "First", InventoryStatus.AVAILABLE);
+        InventoryItem first = new InventoryItem("DRILL-001", "Drill", "First", InventoryStatus.AVAILABLE);
+        InventoryItem sameIdentity = new InventoryItem("DRILL-001", "Other", "Second", InventoryStatus.RETIRED);
+        InventoryItem differentIdentity = new InventoryItem("drill-001", "Drill", "First", InventoryStatus.AVAILABLE);
 
         assertThat(first).isEqualTo(sameIdentity).hasSameHashCodeAs(sameIdentity);
         assertThat(first).isNotEqualTo(differentIdentity);

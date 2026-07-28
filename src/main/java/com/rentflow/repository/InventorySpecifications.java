@@ -19,7 +19,7 @@ final class InventorySpecifications {
             filters.add((root, query, builder) -> builder.equal(root.get("status"), status));
         }
         if (type != null) {
-            var normalizedType = type.toLowerCase(Locale.ROOT);
+            String normalizedType = type.toLowerCase(Locale.ROOT);
             filters.add((root, query, builder) -> builder.equal(builder.lower(root.get("type")), normalizedType));
         }
         return Specification.allOf(filters);

@@ -2,6 +2,7 @@ package com.rentflow.dto;
 
 import java.util.stream.Collectors;
 import jakarta.validation.Validation;
+import jakarta.validation.ValidatorFactory;
 
 import org.junit.jupiter.api.Test;
 
@@ -13,7 +14,7 @@ class InventoryItemDTOTest {
 
     @Test
     void stripsOuterUnicodeWhitespaceFromTypeAndNameButNotSerialNumber() {
-        var request = new InventoryItemDTO(
+        InventoryItemDTO request = new InventoryItemDTO(
                 " DRILL-001 ", "\u2003Industrial drill\u2003", "  Bosch GBH  ", InventoryStatus.AVAILABLE);
 
         assertThat(request.serialNumber()).isEqualTo(" DRILL-001 ");
@@ -23,7 +24,7 @@ class InventoryItemDTOTest {
 
     @Test
     void acceptsTheCompleteValidProfile() {
-        var request = new InventoryItemDTO("DRILL_001.2", "Drill", "Bosch", InventoryStatus.AVAILABLE);
+        InventoryItemDTO request = new InventoryItemDTO("DRILL_001.2", "Drill", "Bosch", InventoryStatus.AVAILABLE);
 
         assertThat(violations(request)).isEmpty();
     }
@@ -40,7 +41,7 @@ class InventoryItemDTOTest {
     }
 
     private java.util.Set<String> violations(InventoryItemDTO request) {
-        try (var factory = Validation.buildDefaultValidatorFactory()) {
+        try (ValidatorFactory factory = Validation.buildDefaultValidatorFactory()) {
             return factory.getValidator().validate(request).stream()
                     .map(violation -> violation.getPropertyPath().toString())
                     .collect(Collectors.toSet());

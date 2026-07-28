@@ -2,7 +2,9 @@ package com.rentflow;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -61,11 +63,11 @@ class InventoryConflictIT extends PostgresIntegrationTest {
 
     @Test
     void concurrentCreateHasOneWinnerAndOneConflict() throws Exception {
-        var ready = new CountDownLatch(2);
-        var start = new CountDownLatch(1);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
 
-        try (var executor = Executors.newFixedThreadPool(2)) {
-            var results = List.of("First", "Second").stream()
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            List<Future<Integer>> results = List.of("First", "Second").stream()
                     .map(name -> executor.submit(() -> {
                         ready.countDown();
                         start.await();

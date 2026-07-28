@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.ServletWebRequest;
 
@@ -19,13 +20,13 @@ class ApiExceptionHandlerTest {
 
     @Test
     void sanitizesUnexpectedFailuresWithoutStartingASpringContext() {
-        var sensitiveText = "IllegalStateException stack trace SELECT password jdbc:postgresql://db/rentflow "
+        String sensitiveText = "IllegalStateException stack trace SELECT password jdbc:postgresql://db/rentflow "
                 + "inventory-secret environment-value request-body-value";
-        var request = new MockHttpServletRequest("POST", "/api/v1/inventory");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/inventory");
         request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer inventory-secret");
         request.setContent("request-body-value".getBytes(StandardCharsets.UTF_8));
 
-        var response =
+        ResponseEntity<ProblemResponse> response =
                 handler.handleUnexpected(new IllegalStateException(sensitiveText), new ServletWebRequest(request));
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
@@ -53,9 +54,9 @@ class ApiExceptionHandlerTest {
 
     @Test
     void convertsOtherMvcClientErrorsWithoutLeakingFrameworkDetails() {
-        var request = new MockHttpServletRequest("GET", "/api/v1/inventory");
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/inventory");
 
-        var response = handler.handleExceptionInternal(
+        ResponseEntity<Object> response = handler.handleExceptionInternal(
                 new IllegalArgumentException("framework detail"),
                 null,
                 HttpHeaders.EMPTY,

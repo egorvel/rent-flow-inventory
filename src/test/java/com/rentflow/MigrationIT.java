@@ -1,6 +1,10 @@
 package com.rentflow;
 
+import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.HashMap;
 import java.util.Map;
 
 import org.flywaydb.core.Flyway;
@@ -66,10 +70,11 @@ class MigrationIT extends PostgresIntegrationTest {
                           AND table_name IN ('inventory_items', 'flyway_schema_history')
                         """, Integer.class)).isZero();
 
-        try (var connection = DriverManager.getConnection(
+        try (Connection connection = DriverManager.getConnection(
                         POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
-                var statement = connection.prepareStatement("SELECT marker FROM rental.sentinel WHERE id = 1")) {
-            try (var resultSet = statement.executeQuery()) {
+                PreparedStatement statement =
+                        connection.prepareStatement("SELECT marker FROM rental.sentinel WHERE id = 1")) {
+            try (ResultSet resultSet = statement.executeQuery()) {
                 assertThat(resultSet.next()).isTrue();
                 assertThat(resultSet.getString("marker")).isEqualTo("untouched");
             }
@@ -96,8 +101,8 @@ class MigrationIT extends PostgresIntegrationTest {
     void committedRowsSurviveASecondApplicationContext() {
         repository.saveAndFlush(new InventoryItem("DRILL-RESTART", "Drill", "Restart", InventoryStatus.AVAILABLE));
 
-        try (var secondContext = startApplication(Map.of())) {
-            var secondRepository = secondContext.getBean(InventoryRepository.class);
+        try (ConfigurableApplicationContext secondContext = startApplication(Map.of())) {
+            InventoryRepository secondRepository = secondContext.getBean(InventoryRepository.class);
             assertThat(secondRepository.findById("DRILL-RESTART")).isPresent();
         }
     }
@@ -105,7 +110,7 @@ class MigrationIT extends PostgresIntegrationTest {
     @Test
     void startupFailsWhenTheOwnedSchemaIsMissing() {
         assertThatThrownBy(() -> {
-                    try (var ignored = startApplication(Map.of(
+                    try (ConfigurableApplicationContext ignored = startApplication(Map.of(
                             "spring.flyway.default-schema", "missing_inventory",
                             "spring.flyway.schemas", "missing_inventory",
                             "spring.jpa.properties.hibernate.default_schema", "missing_inventory"))) {
@@ -124,14 +129,14 @@ class MigrationIT extends PostgresIntegrationTest {
     }
 
     private ConfigurableApplicationContext startApplication(Map<String, Object> overrides) {
-        var properties = new java.util.HashMap<String, Object>();
+        HashMap<String, Object> properties = new HashMap<>();
         properties.put("spring.datasource.url", POSTGRES.getJdbcUrl());
         properties.put("spring.datasource.username", INVENTORY_USERNAME);
         properties.put("spring.datasource.password", INVENTORY_PASSWORD);
         properties.put("spring.main.banner-mode", "off");
         properties.put("logging.level.root", "OFF");
         properties.putAll(overrides);
-        var arguments = properties.entrySet().stream()
+        String[] arguments = properties.entrySet().stream()
                 .map(entry -> "--" + entry.getKey() + "=" + entry.getValue())
                 .toArray(String[]::new);
 

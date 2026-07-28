@@ -5,6 +5,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -31,12 +32,12 @@ class InventoryServiceTest {
         when(repository.existsById("DRILL-001")).thenReturn(false);
         when(repository.saveAndFlush(org.mockito.ArgumentMatchers.any(InventoryItem.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         InventoryItem item = new InventoryItem("DRILL-001", "Industrial drill", "Bosch", InventoryStatus.AVAILABLE);
-        var created = service.create(item);
+        InventoryItem created = service.create(item);
 
-        var captor = ArgumentCaptor.forClass(InventoryItem.class);
+        ArgumentCaptor<InventoryItem> captor = ArgumentCaptor.forClass(InventoryItem.class);
         verify(repository).saveAndFlush(captor.capture());
         assertThat(created).isSameAs(captor.getValue());
         assertThat(created.getSerialNumber()).isEqualTo("DRILL-001");
@@ -45,7 +46,7 @@ class InventoryServiceTest {
     @Test
     void rejectsAnExistingSerialBeforeSaving() {
         when(repository.existsById("DRILL-001")).thenReturn(true);
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
         assertThatThrownBy(() -> service.create(item)).isInstanceOf(InventoryItemAlreadyExistsException.class);
@@ -58,7 +59,7 @@ class InventoryServiceTest {
         when(repository.existsById("DRILL-001")).thenReturn(false);
         when(repository.saveAndFlush(org.mockito.ArgumentMatchers.any(InventoryItem.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate"));
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
         assertThatThrownBy(() -> service.create(item)).isInstanceOf(InventoryItemAlreadyExistsException.class);
@@ -66,9 +67,9 @@ class InventoryServiceTest {
 
     @Test
     void returnsAnExistingItem() {
-        var item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
         when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         assertThat(service.get("DRILL-001")).isSameAs(item);
     }
@@ -76,7 +77,7 @@ class InventoryServiceTest {
     @Test
     void rejectsAMissingItemWithoutMutation() {
         when(repository.findById("MISSING")).thenReturn(Optional.empty());
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         assertThatThrownBy(() -> service.get("MISSING")).isInstanceOf(InventoryItemNotFoundException.class);
 
@@ -86,13 +87,13 @@ class InventoryServiceTest {
 
     @Test
     void replacesOnlyMutableDetailsOnAnExistingItem() {
-        var item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE);
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE);
         when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         InventoryItem toReplace =
                 new InventoryItem("DRILL-001", "Industrial drill", "Updated", InventoryStatus.UNDER_MAINTENANCE);
-        var replaced = service.replace(toReplace);
+        InventoryItem replaced = service.replace(toReplace);
 
         assertThat(replaced).isSameAs(item);
         assertThat(item.getSerialNumber()).isEqualTo("DRILL-001");
@@ -106,7 +107,7 @@ class InventoryServiceTest {
     @Test
     void rejectsReplacementOfAMissingItemWithoutMutation() {
         when(repository.findById("MISSING")).thenReturn(Optional.empty());
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         InventoryItem item = new InventoryItem("MISSING", "Drill", "Updated", InventoryStatus.AVAILABLE);
         assertThatThrownBy(() -> service.replace(item)).isInstanceOf(InventoryItemNotFoundException.class);
@@ -117,13 +118,13 @@ class InventoryServiceTest {
 
     @Test
     void loadsAnExistingItemBeforeDeletingIt() {
-        var item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RETIRED);
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RETIRED);
         when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         service.delete("DRILL-001");
 
-        var inOrder = org.mockito.Mockito.inOrder(repository);
+        InOrder inOrder = org.mockito.Mockito.inOrder(repository);
         inOrder.verify(repository).findById("DRILL-001");
         inOrder.verify(repository).delete(item);
         verifyNoMoreInteractions(repository);
@@ -132,7 +133,7 @@ class InventoryServiceTest {
     @Test
     void rejectsDeletionOfAMissingItemWithoutMutation() {
         when(repository.findById("MISSING")).thenReturn(Optional.empty());
-        var service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository);
 
         assertThatThrownBy(() -> service.delete("MISSING")).isInstanceOf(InventoryItemNotFoundException.class);
 

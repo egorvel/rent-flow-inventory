@@ -162,7 +162,7 @@ class ArchitectureTest {
 
     @Test
     void onlyControllersOwnMvcMappingAnnotations() {
-        for (var annotation : MVC_MAPPING_ANNOTATIONS) {
+        for (Class<? extends Annotation> annotation : MVC_MAPPING_ANNOTATIONS) {
             noClasses()
                     .that()
                     .resideOutsideOfPackage("..controller..")

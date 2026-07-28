@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 
 import com.rentflow.model.InventoryItem;
@@ -149,7 +150,7 @@ class InventoryValidationIT extends PostgresIntegrationTest {
                 "/api/v1/inventory",
                 "NOT_ACCEPTABLE");
 
-        var patchResult = expectProblem(
+        MvcResult patchResult = expectProblem(
                         mockMvc.perform(patch("/api/v1/inventory/DRILL-001")
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content(validRequest("DRILL-001", "AVAILABLE"))),
@@ -221,7 +222,7 @@ class InventoryValidationIT extends PostgresIntegrationTest {
 
     @Test
     void authenticationAndAuthorizationCapabilitiesRemainUnmapped() throws Exception {
-        for (var path :
+        for (String path :
                 new String[] {"/login", "/api/v1/token", "/api/v1/users", "/api/v1/roles", "/api/v1/permissions"}) {
             expectResourceNotFound(path);
         }
