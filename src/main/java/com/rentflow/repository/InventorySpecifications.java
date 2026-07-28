@@ -1,11 +1,13 @@
 package com.rentflow.repository;
 
-import com.rentflow.model.InventoryItem;
-import com.rentflow.model.InventoryStatus;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+
 import org.springframework.data.jpa.domain.Specification;
+
+import com.rentflow.model.InventoryItem;
+import com.rentflow.model.InventoryStatus;
 
 final class InventorySpecifications {
 

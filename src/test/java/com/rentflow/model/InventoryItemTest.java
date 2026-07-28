@@ -1,10 +1,11 @@
 package com.rentflow.model;
 
+import java.lang.reflect.Method;
+
+import org.junit.jupiter.api.Test;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
-
-import java.lang.reflect.Method;
-import org.junit.jupiter.api.Test;
 
 class InventoryItemTest {
 

@@ -1,11 +1,13 @@
 package com.rentflow.dto;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import java.util.stream.Collectors;
+import jakarta.validation.Validation;
+
+import org.junit.jupiter.api.Test;
 
 import com.rentflow.model.InventoryStatus;
-import jakarta.validation.Validation;
-import java.util.stream.Collectors;
-import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 class InventoryItemDTOTest {
 

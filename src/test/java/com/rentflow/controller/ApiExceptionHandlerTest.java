@@ -1,15 +1,17 @@
 package com.rentflow.controller;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import com.rentflow.dto.ProblemResponse;
 import java.nio.charset.StandardCharsets;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.ServletWebRequest;
+
+import com.rentflow.dto.ProblemResponse;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 class ApiExceptionHandlerTest {
 

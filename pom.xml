@@ -187,6 +187,9 @@
                             <style>PALANTIR</style>
                         </palantirJavaFormat>
                         <removeUnusedImports/>
+                        <importOrder>
+                            <order>java|javax|jakarta,org,com,,\#</order>
+                        </importOrder>
                         <formatAnnotations/>
                     </java>
                 </configuration>

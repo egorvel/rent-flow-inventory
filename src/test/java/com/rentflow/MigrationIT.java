@@ -1,14 +1,8 @@
 package com.rentflow;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-
-import com.rentflow.model.InventoryItem;
-import com.rentflow.model.InventoryStatus;
-import com.rentflow.repository.InventoryRepository;
-import com.rentflow.support.PostgresIntegrationTest;
 import java.sql.DriverManager;
 import java.util.Map;
+
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +12,14 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+
+import com.rentflow.model.InventoryItem;
+import com.rentflow.model.InventoryStatus;
+import com.rentflow.repository.InventoryRepository;
+import com.rentflow.support.PostgresIntegrationTest;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class MigrationIT extends PostgresIntegrationTest {

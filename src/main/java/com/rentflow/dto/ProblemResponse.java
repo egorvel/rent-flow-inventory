@@ -1,8 +1,10 @@
 package com.rentflow.dto;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import io.swagger.v3.oas.annotations.media.Schema;
 import java.util.List;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+
+import io.swagger.v3.oas.annotations.media.Schema;
 
 @Schema(description = "RFC 9457 Problem Details with stable RentFlow extensions.", example = """
                 {

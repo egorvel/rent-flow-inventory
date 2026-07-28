@@ -1,14 +1,15 @@
 package com.rentflow.service;
 
-import com.rentflow.model.InventoryItem;
-import com.rentflow.model.InventoryStatus;
-import com.rentflow.repository.InventoryRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import com.rentflow.model.InventoryItem;
+import com.rentflow.model.InventoryStatus;
+import com.rentflow.repository.InventoryRepository;
 
 @Service
 public class InventoryService {

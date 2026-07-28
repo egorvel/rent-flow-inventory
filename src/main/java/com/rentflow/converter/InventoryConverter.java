@@ -1,10 +1,11 @@
 package com.rentflow.converter;
 
+import org.springframework.data.domain.Page;
+import org.springframework.stereotype.Component;
+
 import com.rentflow.dto.InventoryItemDTO;
 import com.rentflow.dto.InventoryPageResponse;
 import com.rentflow.model.InventoryItem;
-import org.springframework.data.domain.Page;
-import org.springframework.stereotype.Component;
 
 @Component
 public class InventoryConverter {

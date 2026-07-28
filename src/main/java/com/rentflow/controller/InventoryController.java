@@ -1,29 +1,14 @@
 package com.rentflow.controller;
 
-import com.rentflow.converter.InventoryConverter;
-import com.rentflow.dto.InventoryItemDTO;
-import com.rentflow.dto.InventoryPageResponse;
-import com.rentflow.dto.ProblemResponse;
-import com.rentflow.model.InventoryItem;
-import com.rentflow.model.InventoryStatus;
-import com.rentflow.service.InventoryService;
-import com.rentflow.service.InventorySortField;
-import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.headers.Header;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.Schema;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
-import io.swagger.v3.oas.annotations.responses.ApiResponses;
-import io.swagger.v3.oas.annotations.tags.Tag;
+import java.net.URI;
+import java.util.Set;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
-import java.net.URI;
-import java.util.Set;
+
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -38,6 +23,24 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import com.rentflow.converter.InventoryConverter;
+import com.rentflow.dto.InventoryItemDTO;
+import com.rentflow.dto.InventoryPageResponse;
+import com.rentflow.dto.ProblemResponse;
+import com.rentflow.model.InventoryItem;
+import com.rentflow.model.InventoryStatus;
+import com.rentflow.service.InventoryService;
+import com.rentflow.service.InventorySortField;
+
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.headers.Header;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 
 @RestController
 @Validated

@@ -1,13 +1,9 @@
 package com.rentflow.controller;
 
-import com.rentflow.dto.ProblemResponse;
-import com.rentflow.dto.ViolationResponse;
-import com.rentflow.model.InventoryStatus;
-import com.rentflow.service.InventoryItemAlreadyExistsException;
-import com.rentflow.service.InventoryItemNotFoundException;
-import jakarta.validation.ConstraintViolationException;
 import java.util.Comparator;
 import java.util.List;
+import jakarta.validation.ConstraintViolationException;
+
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.http.HttpHeaders;
@@ -29,6 +25,13 @@ import org.springframework.web.method.annotation.HandlerMethodValidationExceptio
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import com.rentflow.dto.ProblemResponse;
+import com.rentflow.dto.ViolationResponse;
+import com.rentflow.model.InventoryStatus;
+import com.rentflow.service.InventoryItemAlreadyExistsException;
+import com.rentflow.service.InventoryItemNotFoundException;
+
 import tools.jackson.databind.exc.InvalidFormatException;
 
 @RestControllerAdvice

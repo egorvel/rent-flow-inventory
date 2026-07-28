@@ -1,7 +1,8 @@
 package com.rentflow.controller;
 
-import com.rentflow.dto.ViolationResponse;
 import java.util.List;
+
+import com.rentflow.dto.ViolationResponse;
 
 class RequestValidationException extends RuntimeException {
 
