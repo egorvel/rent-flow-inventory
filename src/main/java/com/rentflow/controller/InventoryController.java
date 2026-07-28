@@ -1,10 +1,10 @@
 package com.rentflow.controller;
 
 import com.rentflow.converter.InventoryConverter;
-import com.rentflow.dto.InventoryItemRequest;
-import com.rentflow.dto.InventoryItemResponse;
+import com.rentflow.dto.InventoryItemDTO;
 import com.rentflow.dto.InventoryPageResponse;
 import com.rentflow.dto.ProblemResponse;
+import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.service.InventoryService;
 import com.rentflow.service.InventorySortField;
@@ -70,7 +70,7 @@ public class InventoryController {
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                                schema = @Schema(implementation = InventoryItemResponse.class))),
+                                schema = @Schema(implementation = InventoryItemDTO.class))),
         @ApiResponse(
                 responseCode = "400",
                 description = "Request validation failed or the JSON body is malformed.",
@@ -108,14 +108,14 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class)))
     })
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<InventoryItemResponse> create(
+    public ResponseEntity<InventoryItemDTO> create(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                             description = "Complete inventory item representation.",
                             required = true)
                     @Valid @RequestBody
-                    InventoryItemRequest request) {
-        var item = service.create(request.serialNumber(), request.type(), request.name(), request.status());
-        var location = URI.create(PATH + "/" + item.getSerialNumber());
+                    InventoryItemDTO request) {
+        InventoryItem item = service.create(converter.toModel(request));
+        URI location = URI.create(PATH + "/" + item.getSerialNumber());
         return ResponseEntity.created(location).body(converter.toResponse(item));
     }
 
@@ -127,7 +127,7 @@ public class InventoryController {
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                                schema = @Schema(implementation = InventoryItemResponse.class))),
+                                schema = @Schema(implementation = InventoryItemDTO.class))),
         @ApiResponse(
                 responseCode = "400",
                 description = "The serial-number path value is invalid.",
@@ -158,7 +158,7 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class)))
     })
     @GetMapping("/{serialNumber}")
-    public InventoryItemResponse get(
+    public InventoryItemDTO get(
             @Parameter(
                             description = "Case-sensitive inventory serial number.",
                             required = true,
@@ -166,12 +166,9 @@ public class InventoryController {
                                     @Schema(
                                             minLength = 1,
                                             maxLength = 64,
-                                            pattern = InventoryItemRequest.SERIAL_NUMBER_PATTERN))
+                                            pattern = InventoryItemDTO.SERIAL_NUMBER_PATTERN))
                     @PathVariable
-                    @Pattern(
-                            regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
-                            message = "must be a valid serial number")
-                    String serialNumber) {
+                    @Pattern(regexp = InventoryItemDTO.SERIAL_NUMBER_PATTERN, message = "must be a valid serial number") String serialNumber) {
         return converter.toResponse(service.get(serialNumber));
     }
 
@@ -183,7 +180,7 @@ public class InventoryController {
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_JSON_VALUE,
-                                schema = @Schema(implementation = InventoryItemResponse.class))),
+                                schema = @Schema(implementation = InventoryItemDTO.class))),
         @ApiResponse(
                 responseCode = "400",
                 description = "Request validation failed, serial numbers differ, or the JSON body is malformed.",
@@ -221,7 +218,7 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class)))
     })
     @PutMapping(path = "/{serialNumber}", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public InventoryItemResponse replace(
+    public InventoryItemDTO replace(
             @Parameter(
                             description = "Case-sensitive inventory serial number.",
                             required = true,
@@ -229,17 +226,14 @@ public class InventoryController {
                                     @Schema(
                                             minLength = 1,
                                             maxLength = 64,
-                                            pattern = InventoryItemRequest.SERIAL_NUMBER_PATTERN))
+                                            pattern = InventoryItemDTO.SERIAL_NUMBER_PATTERN))
                     @PathVariable
-                    @Pattern(
-                            regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
-                            message = "must be a valid serial number")
-                    String serialNumber,
+                    @Pattern(regexp = InventoryItemDTO.SERIAL_NUMBER_PATTERN, message = "must be a valid serial number") String serialNumber,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                             description = "Complete replacement representation with a matching serial number.",
                             required = true)
                     @Valid @RequestBody
-                    InventoryItemRequest request) {
+                    InventoryItemDTO request) {
         if (!serialNumber.equals(request.serialNumber())) {
             throw new RequestValidationException("serialNumber", "must match the path serial number");
         }
@@ -281,12 +275,9 @@ public class InventoryController {
                                     @Schema(
                                             minLength = 1,
                                             maxLength = 64,
-                                            pattern = InventoryItemRequest.SERIAL_NUMBER_PATTERN))
+                                            pattern = InventoryItemDTO.SERIAL_NUMBER_PATTERN))
                     @PathVariable
-                    @Pattern(
-                            regexp = InventoryItemRequest.SERIAL_NUMBER_PATTERN,
-                            message = "must be a valid serial number")
-                    String serialNumber) {
+                    @Pattern(regexp = InventoryItemDTO.SERIAL_NUMBER_PATTERN, message = "must be a valid serial number") String serialNumber) {
         service.delete(serialNumber);
         return ResponseEntity.noContent().build();
     }

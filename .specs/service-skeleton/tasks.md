@@ -128,7 +128,7 @@ and AC12.1; `design.md` §2.1-§2.3, §3.1-§3.2, §4.3-§4.4, §5.1-§5.3,
 
 **DoD.**
 
-- `InventoryItemRequestTest`, `InventoryConverterTest`, and `InventoryServiceTest` use no Spring
+- `InventoryItemDTOTest`, `InventoryConverterTest`, and `InventoryServiceTest` use no Spring
   context; service collaborators use Mockito and rejected paths assert repository
   non-interaction or unchanged state.
 - `InventoryApiIT` proves a valid unauthenticated `POST /api/v1/inventory` returns `201`, the exact

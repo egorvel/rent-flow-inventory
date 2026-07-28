@@ -15,7 +15,7 @@ import jakarta.validation.constraints.Size;
                   "status": "AVAILABLE"
                 }
                 """)
-public record InventoryItemRequest(
+public record InventoryItemDTO(
         @Schema(
                 description = "Unique, manually assigned, immutable serial number.",
                 example = "DRILL-001",
@@ -61,7 +61,7 @@ public record InventoryItemRequest(
 
     public static final String SERIAL_NUMBER_PATTERN = "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$";
 
-    public InventoryItemRequest {
+    public InventoryItemDTO {
         type = type == null ? null : type.strip();
         name = name == null ? null : name.strip();
     }

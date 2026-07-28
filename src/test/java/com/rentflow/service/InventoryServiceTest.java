@@ -31,7 +31,8 @@ class InventoryServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
         var service = new InventoryService(repository);
 
-        var created = service.create("DRILL-001", "Industrial drill", "Bosch", InventoryStatus.AVAILABLE);
+        InventoryItem item = new InventoryItem("DRILL-001", "Industrial drill", "Bosch", InventoryStatus.AVAILABLE);
+        var created = service.create(item);
 
         var captor = ArgumentCaptor.forClass(InventoryItem.class);
         verify(repository).saveAndFlush(captor.capture());
@@ -44,8 +45,8 @@ class InventoryServiceTest {
         when(repository.existsById("DRILL-001")).thenReturn(true);
         var service = new InventoryService(repository);
 
-        assertThatThrownBy(() -> service.create("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE))
-                .isInstanceOf(InventoryItemAlreadyExistsException.class);
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
+        assertThatThrownBy(() -> service.create(item)).isInstanceOf(InventoryItemAlreadyExistsException.class);
 
         verify(repository, never()).saveAndFlush(org.mockito.ArgumentMatchers.any());
     }
@@ -57,8 +58,8 @@ class InventoryServiceTest {
                 .thenThrow(new DataIntegrityViolationException("duplicate"));
         var service = new InventoryService(repository);
 
-        assertThatThrownBy(() -> service.create("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE))
-                .isInstanceOf(InventoryItemAlreadyExistsException.class);
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
+        assertThatThrownBy(() -> service.create(item)).isInstanceOf(InventoryItemAlreadyExistsException.class);
     }
 
     @Test

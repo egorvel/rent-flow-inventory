@@ -21,7 +21,7 @@ import java.util.List;
                 """)
 public record InventoryPageResponse(
         @Schema(description = "Items in the requested page.", requiredMode = Schema.RequiredMode.REQUIRED)
-        List<InventoryItemResponse> items,
+        List<InventoryItemDTO> items,
 
         @Schema(
                 description = "Zero-based requested page number.",

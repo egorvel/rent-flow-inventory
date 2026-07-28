@@ -136,7 +136,7 @@ changing persistence or service contracts.
 
 ### 2.3 Resource representations
 
-`InventoryItemRequest` is the complete representation accepted by both `POST` and `PUT`:
+`InventoryItemDTO` is the complete representation accepted by both `POST` and `PUT`:
 
 ```json
 {
@@ -147,7 +147,7 @@ changing persistence or service contracts.
 }
 ```
 
-`InventoryItemResponse` has the same four properties and no internal identifier:
+`InventoryItemDTO` has the same four properties and no internal identifier:
 
 ```json
 {
@@ -188,7 +188,7 @@ slicing. No transport record accepts or emits database-only data.
 
 ### 3.1 Create item
 
-`POST /api/v1/inventory` accepts `InventoryItemRequest`.
+`POST /api/v1/inventory` accepts `InventoryItemDTO`.
 
 | Result | Status | Body and headers |
 | --- | --- | --- |
@@ -211,7 +211,7 @@ The serial-number alphabet is URI path-segment safe, so no lossy transformation 
 
 | Result | Status | Body |
 | --- | --- | --- |
-| Found | `200 OK` | `InventoryItemResponse` |
+| Found | `200 OK` | `InventoryItemDTO` |
 | Invalid serial-number syntax | `400 Bad Request` | Validation problem |
 | Not found | `404 Not Found` | Item-not-found problem |
 
@@ -251,12 +251,12 @@ a valid collection request, including an empty catalogue.
 
 ### 3.4 Replace item
 
-`PUT /api/v1/inventory/{serialNumber}` accepts a complete `InventoryItemRequest`. The body
+`PUT /api/v1/inventory/{serialNumber}` accepts a complete `InventoryItemDTO`. The body
 `serialNumber` is required and must equal the path value using case-sensitive comparison.
 
 | Result | Status | Body |
 | --- | --- | --- |
-| Replaced | `200 OK` | Updated `InventoryItemResponse` |
+| Replaced | `200 OK` | Updated `InventoryItemDTO` |
 | Invalid body or serial mismatch | `400 Bad Request` | Validation problem |
 | Item does not exist | `404 Not Found` | Item-not-found problem |
 | Unsupported request media type | `415 Unsupported Media Type` | Media-type problem |
@@ -848,7 +848,7 @@ Unit tests use JUnit Jupiter, AssertJ, and Mockito without a Spring context.
 | `InventoryServiceTest` | Create, duplicate handling, get, replace, delete, and missing-item paths |
 | `InventoryConverterTest` | Exact entity-to-response and page-envelope mapping |
 | `InventoryItemTest` | Immutable serial and replaceable mutable fields |
-| `InventoryItemRequestTest` | Type/name normalization and validation profile |
+| `InventoryItemDTOTest` | Type/name normalization and validation profile |
 | `ApiExceptionHandlerTest` | Framework and unexpected failures mapped without a Spring context |
 
 Mockito mocks only the repository. Tests assert returned values, repository calls, state changes,

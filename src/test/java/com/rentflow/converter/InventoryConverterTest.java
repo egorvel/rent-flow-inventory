@@ -1,14 +1,15 @@
 package com.rentflow.converter;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import com.rentflow.dto.InventoryItemResponse;
-import com.rentflow.model.InventoryItem;
-import com.rentflow.model.InventoryStatus;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+
+import com.rentflow.dto.InventoryItemDTO;
+import com.rentflow.model.InventoryItem;
+import com.rentflow.model.InventoryStatus;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 class InventoryConverterTest {
 
@@ -19,8 +20,8 @@ class InventoryConverterTest {
         var item = new InventoryItem("DRILL-001", "Industrial drill", "Bosch GBH", InventoryStatus.AVAILABLE);
 
         assertThat(converter.toResponse(item))
-                .isEqualTo(new InventoryItemResponse(
-                        "DRILL-001", "Industrial drill", "Bosch GBH", InventoryStatus.AVAILABLE));
+                .isEqualTo(
+                        new InventoryItemDTO("DRILL-001", "Industrial drill", "Bosch GBH", InventoryStatus.AVAILABLE));
     }
 
     @Test

@@ -20,15 +20,15 @@ public class InventoryService {
     }
 
     @Transactional
-    public InventoryItem create(String serialNumber, String type, String name, InventoryStatus status) {
-        if (repository.existsById(serialNumber)) {
-            throw new InventoryItemAlreadyExistsException(serialNumber);
+    public InventoryItem create(InventoryItem item) {
+        if (repository.existsById(item.getSerialNumber())) {
+            throw new InventoryItemAlreadyExistsException(item.getSerialNumber());
         }
 
         try {
-            return repository.saveAndFlush(new InventoryItem(serialNumber, type, name, status));
+            return repository.saveAndFlush(item);
         } catch (DataIntegrityViolationException exception) {
-            throw new InventoryItemAlreadyExistsException(serialNumber);
+            throw new InventoryItemAlreadyExistsException(item.getSerialNumber());
         }
     }
 

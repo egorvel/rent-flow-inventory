@@ -5,7 +5,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.rentflow.dto.InventoryItemRequest;
+import com.rentflow.dto.InventoryItemDTO;
 import com.rentflow.support.PostgresIntegrationTest;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -89,18 +89,15 @@ class OpenApiIT extends PostgresIntegrationTest {
 
     @Test
     void locksBusinessAndProblemSchemas() {
-        assertSchemaProperties("InventoryItemRequest", INVENTORY_FIELDS);
-        assertSchemaProperties("InventoryItemResponse", INVENTORY_FIELDS);
-        assertThat(texts(schema("InventoryItemRequest").path("required")))
-                .containsExactlyInAnyOrderElementsOf(INVENTORY_FIELDS);
-        assertThat(texts(schema("InventoryItemResponse").path("required")))
+        assertSchemaProperties("InventoryItemDTO", INVENTORY_FIELDS);
+        assertThat(texts(schema("InventoryItemDTO").path("required")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_FIELDS);
 
-        var requestProperties = schema("InventoryItemRequest").path("properties");
+        var requestProperties = schema("InventoryItemDTO").path("properties");
         var serialNumber = resolved(requestProperties.path("serialNumber"));
         assertThat(serialNumber.path("minLength").asInt()).isEqualTo(1);
         assertThat(serialNumber.path("maxLength").asInt()).isEqualTo(64);
-        assertThat(serialNumber.path("pattern").asString()).isEqualTo(InventoryItemRequest.SERIAL_NUMBER_PATTERN);
+        assertThat(serialNumber.path("pattern").asString()).isEqualTo(InventoryItemDTO.SERIAL_NUMBER_PATTERN);
         assertThat(resolved(requestProperties.path("type")).path("minLength").asInt())
                 .isEqualTo(1);
         assertThat(resolved(requestProperties.path("type")).path("maxLength").asInt())
@@ -111,7 +108,7 @@ class OpenApiIT extends PostgresIntegrationTest {
                 .isEqualTo(200);
         assertThat(enumValues(requestProperties.path("status")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_STATUSES);
-        assertThat(enumValues(schema("InventoryItemResponse").path("properties").path("status")))
+        assertThat(enumValues(schema("InventoryItemDTO").path("properties").path("status")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_STATUSES);
 
         assertSchemaProperties("InventoryPageResponse", Set.of("items", "page", "size", "totalElements", "totalPages"));
@@ -158,18 +155,18 @@ class OpenApiIT extends PostgresIntegrationTest {
             var serialParameter = parameter(operation("/api/v1/inventory/{serialNumber}", method), "serialNumber");
             assertThat(serialParameter.path("required").asBoolean()).isTrue();
             assertThat(resolved(serialParameter.path("schema")).path("pattern").asString())
-                    .isEqualTo(InventoryItemRequest.SERIAL_NUMBER_PATTERN);
+                    .isEqualTo(InventoryItemDTO.SERIAL_NUMBER_PATTERN);
         }
 
-        assertRequestBodySchema(operation("/api/v1/inventory", "post"), "InventoryItemRequest");
-        assertRequestBodySchema(operation("/api/v1/inventory/{serialNumber}", "put"), "InventoryItemRequest");
+        assertRequestBodySchema(operation("/api/v1/inventory", "post"), "InventoryItemDTO");
+        assertRequestBodySchema(operation("/api/v1/inventory/{serialNumber}", "put"), "InventoryItemDTO");
     }
 
     @Test
     void documentsSuccessAndApplicableProblemResponses() {
         var create = operation("/api/v1/inventory", "post");
         assertResponseCodes(create, "201", "400", "406", "409", "415", "500");
-        assertResponseSchema(create, "201", MediaType.APPLICATION_JSON_VALUE, "InventoryItemResponse");
+        assertResponseSchema(create, "201", MediaType.APPLICATION_JSON_VALUE, "InventoryItemDTO");
         assertThat(create.at("/responses/201/headers/Location/schema/format").asString())
                 .isEqualTo("uri");
 
@@ -179,11 +176,11 @@ class OpenApiIT extends PostgresIntegrationTest {
 
         var get = operation("/api/v1/inventory/{serialNumber}", "get");
         assertResponseCodes(get, "200", "400", "404", "406", "500");
-        assertResponseSchema(get, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryItemResponse");
+        assertResponseSchema(get, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryItemDTO");
 
         var replace = operation("/api/v1/inventory/{serialNumber}", "put");
         assertResponseCodes(replace, "200", "400", "404", "406", "415", "500");
-        assertResponseSchema(replace, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryItemResponse");
+        assertResponseSchema(replace, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryItemDTO");
 
         var delete = operation("/api/v1/inventory/{serialNumber}", "delete");
         assertResponseCodes(delete, "204", "400", "404", "500");
@@ -198,8 +195,8 @@ class OpenApiIT extends PostgresIntegrationTest {
 
     @Test
     void publishesSchemaConformingExamplesAndInteractiveSwaggerUi() throws Exception {
-        var inventoryExample = schemaExample("InventoryItemResponse");
-        assertExampleMatchesSchema(inventoryExample, schema("InventoryItemResponse"));
+        var inventoryExample = schemaExample("InventoryItemDTO");
+        assertExampleMatchesSchema(inventoryExample, schema("InventoryItemDTO"));
         assertThat(inventoryExample.path("serialNumber").asString()).isEqualTo("DRILL-001");
         assertThat(inventoryExample.path("status").asString()).isEqualTo("AVAILABLE");
 
