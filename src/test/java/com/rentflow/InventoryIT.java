@@ -291,11 +291,13 @@ class InventoryIT extends PostgresIntegrationTest {
         mockMvc.perform(get("/api/v1/inventory"))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.items[*].serialNumber", contains("A-100", "B-200", "C-300", "D-400")))
-                .andExpect(jsonPath("$.page").value(0))
-                .andExpect(jsonPath("$.size").value(20))
-                .andExpect(jsonPath("$.totalElements").value(4))
-                .andExpect(jsonPath("$.totalPages").value(1));
+                .andExpect(jsonPath("$", aMapWithSize(2)))
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("A-100", "B-200", "C-300", "D-400")))
+                .andExpect(jsonPath("$.page", aMapWithSize(4)))
+                .andExpect(jsonPath("$.page.number").value(0))
+                .andExpect(jsonPath("$.page.size").value(20))
+                .andExpect(jsonPath("$.page.totalElements").value(4))
+                .andExpect(jsonPath("$.page.totalPages").value(1));
     }
 
     @Test
@@ -304,19 +306,19 @@ class InventoryIT extends PostgresIntegrationTest {
 
         mockMvc.perform(get("/api/v1/inventory").param("page", "1").param("size", "2"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[*].serialNumber", contains("C-300", "D-400")))
-                .andExpect(jsonPath("$.page").value(1))
-                .andExpect(jsonPath("$.size").value(2))
-                .andExpect(jsonPath("$.totalElements").value(4))
-                .andExpect(jsonPath("$.totalPages").value(2));
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("C-300", "D-400")))
+                .andExpect(jsonPath("$.page.number").value(1))
+                .andExpect(jsonPath("$.page.size").value(2))
+                .andExpect(jsonPath("$.page.totalElements").value(4))
+                .andExpect(jsonPath("$.page.totalPages").value(2));
 
         mockMvc.perform(get("/api/v1/inventory").param("page", "5").param("size", "2"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items", empty()))
-                .andExpect(jsonPath("$.page").value(5))
-                .andExpect(jsonPath("$.size").value(2))
-                .andExpect(jsonPath("$.totalElements").value(4))
-                .andExpect(jsonPath("$.totalPages").value(2));
+                .andExpect(jsonPath("$.content", empty()))
+                .andExpect(jsonPath("$.page.number").value(5))
+                .andExpect(jsonPath("$.page.size").value(2))
+                .andExpect(jsonPath("$.page.totalElements").value(4))
+                .andExpect(jsonPath("$.page.totalPages").value(2));
     }
 
     @Test
@@ -326,9 +328,9 @@ class InventoryIT extends PostgresIntegrationTest {
 
         mockMvc.perform(get("/api/v1/inventory"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items", empty()))
-                .andExpect(jsonPath("$.totalElements").value(0))
-                .andExpect(jsonPath("$.totalPages").value(0));
+                .andExpect(jsonPath("$.content", empty()))
+                .andExpect(jsonPath("$.page.totalElements").value(0))
+                .andExpect(jsonPath("$.page.totalPages").value(0));
     }
 
     @Test
@@ -337,25 +339,25 @@ class InventoryIT extends PostgresIntegrationTest {
 
         mockMvc.perform(get("/api/v1/inventory").param("status", "AVAILABLE"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[*].serialNumber", contains("A-100", "C-300")));
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("A-100", "C-300")));
 
         mockMvc.perform(get("/api/v1/inventory").param("type", " drill "))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[*].serialNumber", contains("A-100", "C-300")))
-                .andExpect(jsonPath("$.items[0].type").value("Drill"));
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("A-100", "C-300")))
+                .andExpect(jsonPath("$.content[0].type").value("Drill"));
 
         mockMvc.perform(get("/api/v1/inventory").param("type", "rill"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items", empty()));
+                .andExpect(jsonPath("$.content", empty()));
 
         mockMvc.perform(get("/api/v1/inventory").param("status", "RENTED").param("type", " mixer "))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[*].serialNumber", contains("B-200")));
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("B-200")));
 
         mockMvc.perform(get("/api/v1/inventory").param("status", "RETIRED").param("type", "Drill"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items", empty()))
-                .andExpect(jsonPath("$.totalElements").value(0));
+                .andExpect(jsonPath("$.content", empty()))
+                .andExpect(jsonPath("$.page.totalElements").value(0));
     }
 
     @ParameterizedTest
@@ -366,7 +368,7 @@ class InventoryIT extends PostgresIntegrationTest {
 
         mockMvc.perform(get("/api/v1/inventory").param("sort", field).param("direction", direction))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.items[*].serialNumber", contains(expectedSerials.toArray())));
+                .andExpect(jsonPath("$.content[*].serialNumber", contains(expectedSerials.toArray())));
     }
 
     @ParameterizedTest

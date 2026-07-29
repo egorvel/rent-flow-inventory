@@ -76,7 +76,7 @@ catalogue without retrieving the entire data set.
 
 - **AC3.1 (Event-driven):** When a client requests the collection without query parameters, the
   inventory service shall return `200 OK` with the first bounded page, deterministic ordering, and
-  page metadata.
+  a non-null `content` array with nested `page` metadata.
 - **AC3.2 (Event-driven):** When a client supplies valid page and page-size parameters, the
   inventory service shall return the requested page subject to a documented maximum page size.
 - **AC3.3 (Event-driven):** When a client filters by one defined `status`, the inventory service
@@ -91,7 +91,7 @@ catalogue without retrieving the entire data set.
 - **AC3.7 (Unwanted):** If pagination, sorting, or filter parameters are invalid or unsupported,
   then the inventory service shall return `400 Bad Request`.
 - **AC3.8 (Event-driven):** When no items match a valid collection request, the inventory service
-  shall return `200 OK` with an empty item list and page metadata.
+  shall return `200 OK` with an empty `content` array and nested `page` metadata.
 
 ### US4 - Replace an inventory item
 
@@ -287,7 +287,10 @@ so that authentication concerns do not block validation of the service skeleton.
    support partial `PATCH` updates. This is reflected in US4, AC6.5, and the Out of scope section.
    See `design.md` §3.4 and §3.6.
 5. **Collection retrieval:** Listing supports bounded pagination, sorting, exact status filtering,
-   and exact type filtering. This is reflected in US3. See `design.md` §3.3.
+   and exact type filtering. Its response explicitly uses the non-HATEOAS Spring Data
+   `PagedModel<InventoryItemDTO>` shape with `content` and nested `page` metadata, without global
+   `PageImpl` serialization or legacy aliases. This is reflected in US3. See `design.md` §2.3 and
+   §3.3.
 6. **Status lifecycle:** The service validates membership in the status enum but does not enforce a
    transition matrix. This is reflected in AC4.6 and the Out of scope section. See `design.md`
    §5.2.

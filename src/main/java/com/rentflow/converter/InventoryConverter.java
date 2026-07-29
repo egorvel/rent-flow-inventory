@@ -1,10 +1,8 @@
 package com.rentflow.converter;
 
-import org.springframework.data.domain.Page;
 import org.springframework.stereotype.Component;
 
 import com.rentflow.dto.InventoryItemDTO;
-import com.rentflow.dto.InventoryPageResponse;
 import com.rentflow.model.InventoryItem;
 
 @Component
@@ -16,14 +14,5 @@ public class InventoryConverter {
 
     public InventoryItem toModel(InventoryItemDTO dto) {
         return new InventoryItem(dto.serialNumber(), dto.type(), dto.name(), dto.status());
-    }
-
-    public InventoryPageResponse toPageResponse(Page<InventoryItem> page) {
-        return new InventoryPageResponse(
-                page.getContent().stream().map(this::toResponse).toList(),
-                page.getNumber(),
-                page.getSize(),
-                page.getTotalElements(),
-                page.getTotalPages());
     }
 }

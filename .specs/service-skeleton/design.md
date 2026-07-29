@@ -54,7 +54,7 @@ The application root is `com.rentflow`. Production types use the project layout:
 | `com.rentflow.config` | `OpenApiConfig` | OpenAPI metadata and documentation configuration |
 | `com.rentflow.controller` | `InventoryController`, `ApiExceptionHandler` | HTTP binding and errors |
 | `com.rentflow.converter` | `InventoryConverter` | Entity-to-response conversion |
-| `com.rentflow.dto` | Request, response, page, problem, and violation records | Wire contract |
+| `com.rentflow.dto` | Item, problem, and violation records | Wire contract |
 | `com.rentflow.service` | `InventoryService`, `InventorySortField`, exceptions | Use cases and transactions |
 | `com.rentflow.repository` | `InventoryRepository`, `InventorySpecifications` | Persistence queries |
 | `com.rentflow.model` | `InventoryItem`, `InventoryStatus` | Persisted domain state |
@@ -162,11 +162,15 @@ The request record's compact constructor strips leading and trailing Unicode whi
 `type` and `name` before Bean Validation runs. It does not alter `serialNumber`. Response data is
 therefore the normalized persisted representation.
 
-`InventoryPageResponse` is a custom record rather than Spring Data's `Page` JSON shape:
+The collection endpoint explicitly wraps a `Page<InventoryItemDTO>` in
+`org.springframework.data.web.PagedModel<InventoryItemDTO>`. The persistence entities are mapped
+to transport DTOs before wrapping, and global `PageImpl` serialization through
+`PageSerializationMode.VIA_DTO` is not enabled. The response uses Spring Data's stable,
+non-HATEOAS page representation:
 
 ```json
 {
-  "items": [
+  "content": [
     {
       "serialNumber": "DRILL-001",
       "type": "Industrial drill",
@@ -174,15 +178,18 @@ therefore the normalized persisted representation.
       "status": "AVAILABLE"
     }
   ],
-  "page": 0,
-  "size": 20,
-  "totalElements": 1,
-  "totalPages": 1
+  "page": {
+    "size": 20,
+    "number": 0,
+    "totalElements": 1,
+    "totalPages": 1
+  }
 }
 ```
 
-`items` is never null. `totalElements` and `totalPages` describe the filtered result before page
-slicing. No transport record accepts or emits database-only data.
+`content` is never null. `page.totalElements` and `page.totalPages` describe the filtered result
+before page slicing. The representation contains no HATEOAS links or legacy aliases, and no
+transport response emits database-only data.
 
 ## 3. REST API contract
 
@@ -247,9 +254,9 @@ paths are never passed through. Sorting by `status` uses lexicographic enum-name
 other than `serialNumber` adds `serialNumber ASC` as a tie-breaker. Sorting by `serialNumber`
 uses only the requested direction because the key is unique.
 
-A page beyond the last available page is valid and returns an empty `items` list with the
-requested `page`, requested `size`, and accurate totals. The endpoint always returns `200 OK` for
-a valid collection request, including an empty catalogue.
+A page beyond the last available page is valid and returns an empty `content` array with the
+requested `page.number`, requested `page.size`, and accurate totals. The endpoint always returns
+`200 OK` for a valid collection request, including an empty catalogue.
 
 ### 3.4 Replace item
 
@@ -409,9 +416,9 @@ absent filters rather than embedding four query-method combinations in the servi
 
 `InventorySortField` is a service-layer enum whose values contain one public API name and one
 entity attribute name. Its parser rejects all other values before the service builds `PageRequest`.
-The service never passes arbitrary request strings to Spring Data property resolution. Spring
-Data's `Page` remains inside the service/converter boundary and is mapped to the custom page
-response.
+The service never passes arbitrary request strings to Spring Data property resolution. The
+controller maps the service's `Page<InventoryItem>` to `Page<InventoryItemDTO>` before explicitly
+constructing the standard Spring Data web `PagedModel`.
 
 ### 4.4 Persistence and concurrency behavior
 
@@ -588,9 +595,11 @@ The controller uses stable operation IDs:
 | Replace | `replaceInventoryItem` |
 | Delete | `deleteInventoryItem` |
 
-DTO schema annotations describe required fields, sizes, serial pattern, all status values, page
-fields, filters, sorting, success responses, and every problem response from section 6.2. The
-examples in sections 2.3 and 6.1 are also represented in OpenAPI. `PATCH` is absent.
+DTO schema annotations describe required fields, sizes, serial pattern, and all status values.
+Springdoc derives the typed `PagedModel<InventoryItemDTO>` response with its `content` array and
+nested `page` metadata from the controller return type. Controller annotations describe filters,
+sorting, success responses, and every problem response from section 6.2. The examples in sections
+2.3 and 6.1 are also represented in OpenAPI. `PATCH` is absent.
 
 ### 7.3 Contract consistency
 
@@ -849,7 +858,7 @@ Unit tests use JUnit Jupiter, AssertJ, and Mockito without a Spring context.
 | Test | Focus |
 | --- | --- |
 | `InventoryServiceTest` | Create, duplicate handling, get, replace, delete, and missing-item paths |
-| `InventoryConverterTest` | Exact entity-to-response and page-envelope mapping |
+| `InventoryConverterTest` | Exact entity-to-response mapping |
 | `InventoryItemTest` | Immutable serial and replaceable mutable fields |
 | `InventoryItemDTOTest` | Type/name normalization and validation profile |
 | `ApiExceptionHandlerTest` | Framework and unexpected failures mapped without a Spring context |
@@ -918,7 +927,7 @@ suite.
 | Type filter `" drill "` | Stripped and matched case-insensitively to exact type `drill` |
 | Unknown or repeated query parameter | `400` validation problem |
 | Type filter with no matches | `200` with an empty page |
-| Page past the last page | `200` with requested page metadata and empty `items` |
+| Page past the last page | `200` with requested nested `page` metadata and empty `content` |
 | Two items with equal primary sort value | Ordered by `serialNumber ASC` tie-breaker |
 | `PUT` body serial differs only by case | `400`; case-sensitive identity mismatch |
 | `PUT` targets a missing item | `404`; no row is created |
@@ -958,6 +967,7 @@ Task DoD traceability will be added in `tasks.md`.
 - [Spring Boot Flyway initialization](https://docs.spring.io/spring-boot/how-to/data-initialization.html)
 - [Spring Boot health probes](https://docs.spring.io/spring-boot/reference/actuator/endpoints.html#actuator.endpoints.kubernetes-probes)
 - [Spring Boot Testcontainers support](https://docs.spring.io/spring-boot/reference/testing/testcontainers.html)
+- [Spring Data stable `PagedModel`](https://docs.spring.io/spring-data/commons/docs/current/api/org/springframework/data/web/PagedModel.html)
 - [Springdoc 3 documentation](https://springdoc.org/v4/index.html)
 - [Flyway PostgreSQL module](https://documentation.red-gate.com/flyway/reference/database-driver-reference/postgresql-database)
 - [PostgreSQL 18.4 release notes](https://www.postgresql.org/docs/release/18.4/)

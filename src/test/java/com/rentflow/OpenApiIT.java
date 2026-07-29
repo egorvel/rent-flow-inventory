@@ -115,9 +115,15 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(enumValues(schema("InventoryItemDTO").path("properties").path("status")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_STATUSES);
 
-        assertSchemaProperties("InventoryPageResponse", Set.of("items", "page", "size", "totalElements", "totalPages"));
-        assertThat(texts(schema("InventoryPageResponse").path("required")))
-                .containsExactlyInAnyOrder("items", "page", "size", "totalElements", "totalPages");
+        JsonNode pageResponse = resolved(
+                responseSchema(operation("/api/v1/inventory", "get"), "200", MediaType.APPLICATION_JSON_VALUE));
+        assertThat(names(pageResponse.path("properties"))).containsExactlyInAnyOrder("content", "page");
+        JsonNode contentSchema = resolved(pageResponse.path("properties").path("content"));
+        assertThat(contentSchema.path("type").asString()).isEqualTo("array");
+        assertThat(contentSchema.path("items").path("$ref").asString()).endsWith("/InventoryItemDTO");
+        JsonNode pageMetadata = resolved(pageResponse.path("properties").path("page"));
+        assertThat(names(pageMetadata.path("properties")))
+                .containsExactlyInAnyOrder("size", "number", "totalElements", "totalPages");
         assertSchemaProperties(
                 "ProblemResponse", Set.of("type", "title", "status", "detail", "instance", "code", "violations"));
         assertThat(texts(schema("ProblemResponse").path("required")))
@@ -176,7 +182,8 @@ class OpenApiIT extends PostgresIntegrationTest {
 
         JsonNode list = operation("/api/v1/inventory", "get");
         assertResponseCodes(list, "200", "400", "406", "500");
-        assertResponseSchema(list, "200", MediaType.APPLICATION_JSON_VALUE, "InventoryPageResponse");
+        JsonNode pageResponse = resolved(responseSchema(list, "200", MediaType.APPLICATION_JSON_VALUE));
+        assertThat(names(pageResponse.path("properties"))).containsExactlyInAnyOrder("content", "page");
 
         JsonNode get = operation("/api/v1/inventory/{serialNumber}", "get");
         assertResponseCodes(get, "200", "400", "404", "406", "500");
@@ -306,11 +313,13 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private void assertResponseSchema(JsonNode operation, String status, String mediaType, String schemaName) {
-        String escapedMediaType = mediaType.replace("/", "~1");
-        assertThat(operation
-                        .at("/responses/" + status + "/content/" + escapedMediaType + "/schema/$ref")
-                        .asString())
+        assertThat(responseSchema(operation, status, mediaType).path("$ref").asString())
                 .endsWith("/" + schemaName);
+    }
+
+    private JsonNode responseSchema(JsonNode operation, String status, String mediaType) {
+        String escapedMediaType = mediaType.replace("/", "~1");
+        return operation.at("/responses/" + status + "/content/" + escapedMediaType + "/schema");
     }
 
     private void assertProblemSchemas(JsonNode operation, Set<String> responseCodes) {

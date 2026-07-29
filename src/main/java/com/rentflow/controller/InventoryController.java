@@ -9,7 +9,9 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PagedModel;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -26,7 +28,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.rentflow.converter.InventoryConverter;
 import com.rentflow.dto.InventoryItemDTO;
-import com.rentflow.dto.InventoryPageResponse;
 import com.rentflow.dto.ProblemResponse;
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
@@ -287,13 +288,7 @@ public class InventoryController {
 
     @Operation(operationId = "listInventoryItems", summary = "List, filter, and sort inventory items")
     @ApiResponses({
-        @ApiResponse(
-                responseCode = "200",
-                description = "Bounded inventory page returned.",
-                content =
-                        @Content(
-                                mediaType = MediaType.APPLICATION_JSON_VALUE,
-                                schema = @Schema(implementation = InventoryPageResponse.class))),
+        @ApiResponse(responseCode = "200", description = "Bounded inventory page returned."),
         @ApiResponse(
                 responseCode = "400",
                 description = "One or more query parameters are invalid.",
@@ -317,7 +312,7 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class)))
     })
     @GetMapping
-    public InventoryPageResponse list(
+    public PagedModel<InventoryItemDTO> list(
             @Parameter(hidden = true) HttpServletRequest servletRequest,
             @Parameter(description = "Zero-based page number.", schema = @Schema(defaultValue = "0", minimum = "0"))
                     @RequestParam(defaultValue = "0")
@@ -368,7 +363,9 @@ public class InventoryController {
         InventorySortField sortField = parseSortField(sort);
         Sort.Direction sortDirection = parseDirection(direction);
         String normalizedType = type == null ? null : type.strip();
-        return converter.toPageResponse(service.list(page, size, status, normalizedType, sortField, sortDirection));
+        Page<InventoryItemDTO> result = service.list(page, size, status, normalizedType, sortField, sortDirection)
+                .map(converter::toResponse);
+        return new PagedModel<>(result);
     }
 
     private void validateCollectionParameters(HttpServletRequest request) {

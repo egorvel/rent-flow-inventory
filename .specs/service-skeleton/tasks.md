@@ -156,17 +156,19 @@ and AC12.1; `design.md` §2.1-§2.3, §3.1-§3.2, §4.3-§4.4, §5.1-§5.3,
 
 **Scope.**
 
-- Add `InventoryPageResponse`, `InventorySortField`, the optional JPA specifications, and the
-  collection `GET` mapping with a strict query-parameter allowlist.
+- Add `InventorySortField`, the optional JPA specifications, and the collection `GET` mapping with
+  a strict query-parameter allowlist.
+- Map the result page to `InventoryItemDTO` and explicitly wrap it in the non-HATEOAS Spring Data
+  `PagedModel`; do not expose entities or enable global `PageImpl` serialization.
 - Add full-stack query tests for pagination, filtering, sorting, validation, and empty results.
 
 **DoD.**
 
-- `InventoryIT` proves the no-parameter request returns page `0`, size `20`, accurate totals,
-  a non-null `items` array, and deterministic `serialNumber` ordering.
+- `InventoryIT` proves the no-parameter request returns a non-null `content` array, nested `page`
+  metadata with number `0`, size `20`, accurate totals, and deterministic `serialNumber` ordering.
 - Valid page/size combinations, an empty catalogue, a page beyond the end, status filtering,
   case-insensitive exact type filtering after stripping, and combined filters return the exact
-  documented page envelope.
+  documented Spring Data `PagedModel` envelope without legacy aliases or HATEOAS links.
 - Ascending and descending sorts work for the four allowlisted fields; duplicate primary sort
   values prove the `serialNumber ASC` tie-breaker, while serial sorting uses its requested
   direction.
@@ -270,7 +272,8 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
 - `OpenApiIT` proves the five paths and stable operation IDs exist, `PATCH` and security schemes
   are absent, and request/response schemas expose exactly the four business fields.
 - The test proves all six statuses, validation constraints, pagination/filter/sort defaults and
-  bounds, success responses, and applicable documented problem responses are present.
+  bounds, the typed `PagedModel` `content` array and nested `page` metadata, success responses,
+  and applicable documented problem responses are present.
 - Inventory-item and Problem Details examples are present and validate against their declared
   schemas.
 - `mvn -B -ntp verify` succeeds, and changing an API path, operation, enum, schema property, or
