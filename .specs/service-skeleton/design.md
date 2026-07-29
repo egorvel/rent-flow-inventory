@@ -877,7 +877,6 @@ between tests through the Inventory-owned table; tests do not depend on executio
 | `InventoryQueryIT` | Defaults, bounds, empty pages, filters, combined filters, all sorts |
 | `InventoryConflictIT` | Duplicate create returns stable `409` without changing the original |
 | `OpenApiIT` | Section 7.3 contract assertions |
-| `HealthIT` | Healthy liveness/readiness and hidden details with a real database |
 
 The query suite includes duplicate sort values to prove the serial-number tie-breaker. It also
 proves serial case sensitivity and type-filter case insensitivity.

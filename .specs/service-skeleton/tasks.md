@@ -288,7 +288,6 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
 
 - Configure Actuator exposure, additional probe paths, hidden details, and distinct liveness and
   database-aware readiness groups.
-- Add `HealthIT` against the real PostgreSQL container.
 
 **DoD.**
 
