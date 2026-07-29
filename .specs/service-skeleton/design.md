@@ -226,7 +226,7 @@ Repository lookup uses the case-sensitive natural key exactly as supplied in the
 | `page` | Integer | `0` | Minimum `0` |
 | `size` | Integer | `20` | Minimum `1`, maximum `100` |
 | `status` | `InventoryStatus` | None | Exact uppercase enum value |
-| `type` | String | None | Strip whitespace, 1-100 chars, case-insensitive exact match |
+| `type` | String | None | Raw value nonblank and 1-100 chars, then strip whitespace; case-insensitive exact match |
 | `sort` | String enum | `serialNumber` | `serialNumber`, `type`, `name`, or `status` |
 | `direction` | String enum | `asc` | `asc` or `desc`, parsed case-insensitively |
 
@@ -236,9 +236,11 @@ enums, blank filters, sort fields, or directions produce a validation problem wi
 `400 Bad Request`. The allowlist is a private constant owned by `InventoryController`; this does
 not require a global interceptor for one collection endpoint.
 
-The optional `status` and `type` predicates are combined with logical `AND`. Type filtering uses
-`lower(type) = lower(:type)` against the stripped filter; it is not substring or fuzzy search.
-Stored type capitalization is preserved.
+The optional `status` and `type` predicates are combined with logical `AND`. A type filter is
+validated in its raw request form before stripping, so surrounding whitespace counts toward the
+100-character query-parameter limit. Type filtering then uses `lower(type) = lower(:type)` against
+the stripped filter; it is not substring or fuzzy search. Stored type capitalization is
+preserved.
 
 API sort names are mapped through an allowlist to entity attributes. Client-provided JPA property
 paths are never passed through. Sorting by `status` uses lexicographic enum-name order. Every sort
@@ -435,7 +437,7 @@ dependency's default message bundle.
 | Body `type` | Unicode `strip()` | Required, nonblank, maximum 100 characters after stripping |
 | Body `name` | Unicode `strip()` | Required, nonblank, maximum 200 characters after stripping |
 | Body `status` | None | Required member of `InventoryStatus` |
-| Query `type` | Unicode `strip()` | If present, nonblank and maximum 100 characters |
+| Query `type` | Validate raw value, then Unicode `strip()` | If present, raw value is nonblank and 1-100 characters |
 | Query `page` | Integer conversion | At least 0 |
 | Query `size` | Integer conversion | From 1 through 100 |
 | Query `status` | Enum conversion | Exact uppercase enum name |
@@ -553,9 +555,10 @@ any remaining framework `ErrorResponse` to RFC 9457 while preserving the framewo
 the generic type and code in section 6.2 are used when no dedicated catalogue entry exists. No MVC
 error falls back to an HTML or legacy error-map response.
 
-The unexpected-error handler logs the exception server-side with method and request path but does
-not log request bodies or credentials. No exception class, stack trace, SQL, constraint name,
-database URL, username, password, or environment value is serialized.
+The unexpected-error handler logs the complete throwable and stack trace server-side together with
+the request method and path. It does not independently log request bodies or credentials. No
+exception class, stack trace, SQL, constraint name, database URL, username, password, or
+environment value is serialized in the HTTP response.
 
 ## 7. OpenAPI and Swagger
 
@@ -901,7 +904,9 @@ checkout:
 
 These checks validate image construction, non-root execution, migration startup, health semantics,
 and volume persistence. The script uses strict shell error handling, bounded health polling, and a
-cleanup trap; it must not print environment secrets.
+cleanup trap; it must not print environment secrets. Live probe, database-outage, and recovery
+acceptance is owned by this container smoke test and is not duplicated in the Maven integration
+suite.
 
 ## 12. Edge cases
 

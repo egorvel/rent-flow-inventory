@@ -239,7 +239,8 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
   header.
 - `ApiExceptionHandlerTest` runs without a Spring context and proves an unexpected exception
   becomes the fixed `500` problem without exception class, stack trace, SQL, database URL,
-  credentials, environment values, or request-body content.
+  credentials, environment values, or request-body content. It also captures server logs and
+  proves the request method/path and complete throwable stack trace are logged.
 - Full-stack requests without credentials reach every in-scope operation; representative
   `/login`, token, user, role, and permission paths remain unmapped, and no Spring Security
   dependency or application dependency on Spring Security exists.
@@ -291,18 +292,15 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
 
 **DoD.**
 
-- With PostgreSQL available, `/actuator/health/liveness`, `/livez`,
-  `/actuator/health/readiness`, and `/readyz` return `200` and `{"status":"UP"}` without component
-  or database details.
-- After PostgreSQL is stopped, bounded polling observes readiness return `503` while both
-  liveness paths remain `200`; an API database failure uses the sanitized Problem Details
-  contract.
-- After PostgreSQL restarts, bounded polling observes readiness recover without restarting the
-  application and committed data becomes readable again.
-- A startup integration scenario with unavailable connectivity or failed migration/schema
-  validation never reaches an accepting/readiness-up application state.
-- Only health is exposed through Actuator over HTTP.
-- `mvn -B -ntp verify` succeeds with deterministic health tests and no blindly increased timeout.
+- Application configuration exposes only health through Actuator, hides component details, maps
+  `/livez` to the `livenessState`-only group, and maps `/readyz` to the
+  `readinessState`-plus-`db` group.
+- Flyway and JPA remain startup gates, so unavailable connectivity or failed migration/schema
+  validation prevents an accepting application context.
+- Live healthy-probe, database-outage, liveness-independence, readiness-recovery, and persisted-data
+  acceptance is owned by T9's container smoke test rather than duplicated in a Maven health IT.
+- `mvn -B -ntp verify` succeeds with the operational configuration and existing startup-failure
+  coverage active.
 
 ### T9 - Package and smoke-test the container stack
 
@@ -335,8 +333,9 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
   password.
 - `scripts/container-smoke-test.sh` passes after building and starting the stack: it creates and
   retrieves an item, restarts `inventory` and retrieves it again, proves database loss changes
-  readiness but not liveness, proves readiness recovery, recreates the stack without deleting the
-  volume, and retrieves the same item.
+  `/readyz` to `503` while `/livez` remains `200`, proves `/readyz` recovery, recreates the stack
+  without deleting the volume, and retrieves the same item. This is the live runtime acceptance
+  path for AC9.4-AC9.5.
 - The smoke script uses strict shell mode, bounded health polling, and a cleanup trap; its output
   contains no environment secret. `bash -n scripts/container-smoke-test.sh` and
   `bash -n docker/postgres/init-inventory.sh` succeed.
@@ -391,7 +390,7 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
 | AC8.4 | T2 context-restart persistence and T9 container/stack-restart persistence checks |
 | AC8.5-AC8.6 | T2 Flyway-only, schema-local history, role isolation, and sentinel-schema assertions |
 | AC9.1-AC9.3 | T9 clean multi-stage build, non-root inspection, and Compose startup checks |
-| AC9.4-AC9.5 | T8 health integration tests and T9 live stack outage checks |
+| AC9.4-AC9.5 | T8 probe-group configuration and T9 live stack health, outage, and recovery checks |
 | AC9.6-AC9.7 | T9 volume persistence and environment-only runtime configuration checks |
 | AC10.1-AC10.3 | T10 README content and executable-command checks |
 | AC10.4 | T1 pinned Maven Wrapper and T10 Wrapper lifecycle check |

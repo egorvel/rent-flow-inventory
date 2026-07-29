@@ -3,6 +3,9 @@ package com.rentflow.controller;
 import java.nio.charset.StandardCharsets;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -14,6 +17,7 @@ import com.rentflow.dto.ProblemResponse;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+@ExtendWith(OutputCaptureExtension.class)
 class ApiExceptionHandlerTest {
 
     private final ApiExceptionHandler handler = new ApiExceptionHandler();
@@ -74,5 +78,18 @@ class ApiExceptionHandlerTest {
                         "/api/v1/inventory",
                         "HTTP_ERROR",
                         java.util.List.of()));
+    }
+
+    @Test
+    void logsUnexpectedFailuresWithTheCompleteStackTrace(CapturedOutput output) {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/inventory/DRILL-001");
+
+        handler.handleUnexpected(new IllegalStateException("boom"), new ServletWebRequest(request));
+
+        assertThat(output)
+                .contains("Unexpected failure handling GET /api/v1/inventory/DRILL-001")
+                .contains("java.lang.IllegalStateException: boom")
+                .contains(
+                        "at com.rentflow.controller.ApiExceptionHandlerTest.logsUnexpectedFailuresWithTheCompleteStackTrace");
     }
 }

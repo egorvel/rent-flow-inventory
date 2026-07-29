@@ -218,13 +218,15 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(Exception.class)
     ResponseEntity<ProblemResponse> handleUnexpected(Exception exception, WebRequest request) {
         HttpServletRequest servletRequest = ((ServletWebRequest) request).getRequest();
-        logger.error("Unexpected failure handling "
-                + servletRequest.getMethod()
-                + " "
-                + servletRequest.getRequestURI()
-                + " ("
-                + exception.getClass().getName()
-                + ")");
+        logger.error(
+                "Unexpected failure handling "
+                        + servletRequest.getMethod()
+                        + " "
+                        + servletRequest.getRequestURI()
+                        + " ("
+                        + exception.getClass().getName()
+                        + ")",
+                exception);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
                 .body(internalError(request));
