@@ -131,14 +131,14 @@ and AC12.1; `design.md` §2.1-§2.3, §3.1-§3.2, §4.3-§4.4, §5.1-§5.3,
 - `InventoryItemDTOTest`, `InventoryConverterTest`, and `InventoryServiceTest` use no Spring
   context; service collaborators use Mockito and rejected paths assert repository
   non-interaction or unchanged state.
-- `InventoryApiIT` proves a valid unauthenticated `POST /api/v1/inventory` returns `201`, the exact
+- `InventoryIT` proves a valid unauthenticated `POST /api/v1/inventory` returns `201`, the exact
   normalized four-field representation, a resource `Location`, and a row whose case-sensitive
   serial number is the client-supplied value.
 - The same suite proves valid item `GET` returns `200`, missing item `GET` returns `404`, invalid
   path syntax returns `400`, and `DRILL-001` and `drill-001` remain distinct resources.
 - Invalid, incomplete, blank, overlength, unknown-property, malformed, and undefined-status
   create bodies return `400` and leave the database unchanged.
-- `InventoryConflictIT` proves sequential and concurrent duplicate creates return the documented
+- `InventoryIT` proves sequential and concurrent duplicate creates return the documented
   `409` problem for the loser, preserve the original row, and never expose a constraint or SQL
   detail.
 - All slice errors use `application/problem+json` with the required stable fields; validation
@@ -162,7 +162,7 @@ and AC12.1; `design.md` §2.1-§2.3, §3.1-§3.2, §4.3-§4.4, §5.1-§5.3,
 
 **DoD.**
 
-- `InventoryQueryIT` proves the no-parameter request returns page `0`, size `20`, accurate totals,
+- `InventoryIT` proves the no-parameter request returns page `0`, size `20`, accurate totals,
   a non-null `items` array, and deterministic `serialNumber` ordering.
 - Valid page/size combinations, an empty catalogue, a page beyond the end, status filtering,
   case-insensitive exact type filtering after stripping, and combined filters return the exact
@@ -197,7 +197,7 @@ and AC12.1; `design.md` §3.4-§3.5, §4.4, §5.1-§5.3, §6, §11.1-§11.2, §1
 - Unit tests prove replacement changes only stripped type, stripped name, and status on the
   managed entity, while deletion loads before removing and every missing-item path is
   non-mutating.
-- `InventoryApiIT` proves a valid full `PUT` returns `200`, persists exactly the returned mutable
+- `InventoryIT` proves a valid full `PUT` returns `200`, persists exactly the returned mutable
   fields, preserves the serial number, and accepts every defined status from every prior status.
 - A path/body serial mismatch, including a case-only difference, returns `400` before repository
   mutation; malformed or invalid replacements return `400` and preserve the complete original
@@ -228,7 +228,7 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
 
 **DoD.**
 
-- `InventoryValidationIT` proves body, path, and query validation, invalid enum handling,
+- `InventoryIT` proves body, path, and query validation, invalid enum handling,
   malformed JSON, unknown properties, unsupported request media type, unacceptable response
   media, unmapped paths, and unsupported methods including `PATCH`.
 - Every error response has `application/problem+json` and exact `type`, `title`, `status`,

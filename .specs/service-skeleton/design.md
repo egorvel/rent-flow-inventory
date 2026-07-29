@@ -872,10 +872,7 @@ between tests through the Inventory-owned table; tests do not depend on executio
 | Test | Required observations |
 | --- | --- |
 | `MigrationIT` | V1 applies in `inventory`, history is schema-local, no `public` objects are created, constraints reject invalid rows |
-| `InventoryApiIT` | CRUD statuses/bodies, `Location`, persistence, delete, no upsert |
-| `InventoryValidationIT` | Body/path/query validation, malformed JSON, media type, method errors |
-| `InventoryQueryIT` | Defaults, bounds, empty pages, filters, combined filters, all sorts |
-| `InventoryConflictIT` | Duplicate create returns stable `409` without changing the original |
+| `InventoryIT` | CRUD statuses/bodies, `Location`, persistence, delete, no upsert; body/path/query validation, malformed JSON, media type, method errors; query defaults, bounds, empty pages, filters, combined filters, and all sorts; sequential and concurrent duplicate creates return stable `409` without changing the original |
 | `OpenApiIT` | Section 7.3 contract assertions |
 
 The query suite includes duplicate sort values to prove the serial-number tie-breaker. It also
