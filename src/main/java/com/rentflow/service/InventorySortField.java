@@ -3,30 +3,24 @@ package com.rentflow.service;
 import java.util.Arrays;
 
 public enum InventorySortField {
-    SERIAL_NUMBER("serialNumber", "serialNumber"),
-    TYPE("type", "type"),
-    NAME("name", "name"),
-    STATUS("status", "status");
+    SERIAL_NUMBER("serialNumber"),
+    TYPE("type"),
+    NAME("name"),
+    STATUS("status");
 
-    private final String apiName;
-    private final String entityAttribute;
+    private final String property;
 
-    InventorySortField(String apiName, String entityAttribute) {
-        this.apiName = apiName;
-        this.entityAttribute = entityAttribute;
+    InventorySortField(String property) {
+        this.property = property;
     }
 
-    public String apiName() {
-        return apiName;
-    }
-
-    public String entityAttribute() {
-        return entityAttribute;
+    public String property() {
+        return property;
     }
 
     public static InventorySortField fromApiName(String apiName) {
         return Arrays.stream(values())
-                .filter(field -> field.apiName.equals(apiName))
+                .filter(field -> field.property.equals(apiName))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Unsupported inventory sort field"));
     }

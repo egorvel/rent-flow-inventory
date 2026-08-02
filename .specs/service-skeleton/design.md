@@ -414,11 +414,12 @@ interface InventoryRepository
 status-equality and case-insensitive type-equality specifications. It returns conjunctions for
 absent filters rather than embedding four query-method combinations in the service.
 
-`InventorySortField` is a service-layer enum whose values contain one public API name and one
-entity attribute name. Its parser rejects all other values before the service builds `PageRequest`.
-The service never passes arbitrary request strings to Spring Data property resolution. The
-controller maps the service's `Page<InventoryItem>` to `Page<InventoryItemDTO>` before explicitly
-constructing the standard Spring Data web `PagedModel`.
+`InventorySortField` is a service-layer enum whose values each contain one allowlisted `property`
+string. The public sort names and entity attributes are intentionally identical, so that single
+value is used for parsing and for Spring Data sorting. Its case-sensitive parser rejects all other
+values before the service builds `PageRequest`; the service never passes arbitrary request strings
+to Spring Data property resolution. The controller maps the service's `Page<InventoryItem>` to
+`Page<InventoryItemDTO>` before explicitly constructing the standard Spring Data web `PagedModel`.
 
 ### 4.4 Persistence and concurrency behavior
 

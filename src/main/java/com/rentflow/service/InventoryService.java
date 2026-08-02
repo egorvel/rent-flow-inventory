@@ -65,7 +65,7 @@ public class InventoryService {
             InventorySortField sortField,
             Sort.Direction direction) {
         ArrayList<Sort.Order> orders = new java.util.ArrayList<>();
-        orders.add(new Sort.Order(direction, sortField.entityAttribute()));
+        orders.add(new Sort.Order(direction, sortField.property()));
         if (sortField != InventorySortField.SERIAL_NUMBER) {
             orders.add(Sort.Order.asc("serialNumber"));
         }

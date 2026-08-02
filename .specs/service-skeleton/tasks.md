@@ -156,8 +156,8 @@ and AC12.1; `design.md` §2.1-§2.3, §3.1-§3.2, §4.3-§4.4, §5.1-§5.3,
 
 **Scope.**
 
-- Add `InventorySortField`, the optional JPA specifications, and the collection `GET` mapping with
-  a strict query-parameter allowlist.
+- Add `InventorySortField` as a one-property, case-sensitive sort allowlist, the optional JPA
+  specifications, and the collection `GET` mapping with a strict query-parameter allowlist.
 - Map the result page to `InventoryItemDTO` and explicitly wrap it in the non-HATEOAS Spring Data
   `PagedModel`; do not expose entities or enable global `PageImpl` serialization.
 - Add full-stack query tests for pagination, filtering, sorting, validation, and empty results.
