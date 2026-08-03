@@ -16,11 +16,11 @@ final class InventorySpecifications {
     static Specification<InventoryItem> withFilters(InventoryStatus status, String type) {
         List<Specification<InventoryItem>> filters = new ArrayList<>();
         if (status != null) {
-            filters.add((root, query, builder) -> builder.equal(root.get("status"), status));
+            filters.add((root, _, builder) -> builder.equal(root.get("status"), status));
         }
         if (type != null) {
             String normalizedType = type.toLowerCase(Locale.ROOT);
-            filters.add((root, query, builder) -> builder.equal(builder.lower(root.get("type")), normalizedType));
+            filters.add((root, _, builder) -> builder.equal(builder.lower(root.get("type")), normalizedType));
         }
         return Specification.allOf(filters);
     }
