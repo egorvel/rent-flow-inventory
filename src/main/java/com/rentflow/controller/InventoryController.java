@@ -18,6 +18,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -28,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.rentflow.converter.InventoryConverter;
 import com.rentflow.dto.InventoryItemDTO;
+import com.rentflow.dto.InventoryStatusUpdateDTO;
 import com.rentflow.dto.ProblemResponse;
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
@@ -243,6 +245,73 @@ public class InventoryController {
         }
         InventoryItem item = converter.toModel(request);
         return converter.toResponse(service.replace(item));
+    }
+
+    @Operation(operationId = "transitionInventoryStatus", summary = "Transition an inventory item's status")
+    @ApiResponses({
+        @ApiResponse(responseCode = "204", description = "Inventory status transitioned."),
+        @ApiResponse(
+                responseCode = "400",
+                description = "The path or request body is invalid.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "404",
+                description = "The inventory item does not exist.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "406",
+                description = "No acceptable response representation is available.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "409",
+                description = "The requested lifecycle transition is not permitted.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "415",
+                description = "The request media type is unsupported.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "500",
+                description = "An unexpected server error occurred.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class)))
+    })
+    @PatchMapping(path = "/{serialNumber}/status", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Void> transitionStatus(
+            @Parameter(
+                            description = "Case-sensitive inventory serial number.",
+                            required = true,
+                            schema =
+                                    @Schema(
+                                            minLength = 1,
+                                            maxLength = 64,
+                                            pattern = InventoryItemDTO.SERIAL_NUMBER_PATTERN))
+                    @PathVariable
+                    @Pattern(regexp = InventoryItemDTO.SERIAL_NUMBER_PATTERN, message = "must be a valid serial number") String serialNumber,
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                            description = "The sole target status for the lifecycle transition.",
+                            required = true)
+                    @Valid @RequestBody
+                    InventoryStatusUpdateDTO request) {
+        service.transitionStatus(serialNumber, request.status());
+        return ResponseEntity.noContent().build();
     }
 
     @Operation(operationId = "deleteInventoryItem", summary = "Permanently delete an inventory item")

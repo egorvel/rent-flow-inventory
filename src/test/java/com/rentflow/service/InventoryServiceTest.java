@@ -12,12 +12,15 @@ import org.springframework.dao.DataIntegrityViolationException;
 
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
+import com.rentflow.model.InventoryStatusHistory;
 import com.rentflow.repository.InventoryRepository;
+import com.rentflow.repository.InventoryStatusHistoryRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -27,12 +30,15 @@ class InventoryServiceTest {
     @Mock
     private InventoryRepository repository;
 
+    @Mock
+    private InventoryStatusHistoryRepository historyRepository;
+
     @Test
     void createsAndFlushesAnItemWithTheAssignedSerialNumber() {
         when(repository.existsById("DRILL-001")).thenReturn(false);
         when(repository.saveAndFlush(org.mockito.ArgumentMatchers.any(InventoryItem.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         InventoryItem item = new InventoryItem("DRILL-001", "Industrial drill", "Bosch", InventoryStatus.AVAILABLE);
         InventoryItem created = service.create(item);
@@ -46,7 +52,7 @@ class InventoryServiceTest {
     @Test
     void rejectsAnExistingSerialBeforeSaving() {
         when(repository.existsById("DRILL-001")).thenReturn(true);
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
         assertThatThrownBy(() -> service.create(item)).isInstanceOf(InventoryItemAlreadyExistsException.class);
@@ -59,7 +65,7 @@ class InventoryServiceTest {
         when(repository.existsById("DRILL-001")).thenReturn(false);
         when(repository.saveAndFlush(org.mockito.ArgumentMatchers.any(InventoryItem.class)))
                 .thenThrow(new DataIntegrityViolationException("duplicate"));
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
         assertThatThrownBy(() -> service.create(item)).isInstanceOf(InventoryItemAlreadyExistsException.class);
@@ -69,7 +75,7 @@ class InventoryServiceTest {
     void returnsAnExistingItem() {
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Bosch", InventoryStatus.AVAILABLE);
         when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         assertThat(service.get("DRILL-001")).isSameAs(item);
     }
@@ -77,7 +83,7 @@ class InventoryServiceTest {
     @Test
     void rejectsAMissingItemWithoutMutation() {
         when(repository.findById("MISSING")).thenReturn(Optional.empty());
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         assertThatThrownBy(() -> service.get("MISSING")).isInstanceOf(InventoryItemNotFoundException.class);
 
@@ -89,7 +95,7 @@ class InventoryServiceTest {
     void replacesOnlyMutableDetailsOnAnExistingItem() {
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE);
         when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         InventoryItem toReplace =
                 new InventoryItem("DRILL-001", "Industrial drill", "Updated", InventoryStatus.UNDER_MAINTENANCE);
@@ -102,12 +108,13 @@ class InventoryServiceTest {
         assertThat(item.getStatus()).isEqualTo(InventoryStatus.UNDER_MAINTENANCE);
         verify(repository).findById("DRILL-001");
         verifyNoMoreInteractions(repository);
+        verifyNoInteractions(historyRepository);
     }
 
     @Test
     void rejectsReplacementOfAMissingItemWithoutMutation() {
         when(repository.findById("MISSING")).thenReturn(Optional.empty());
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         InventoryItem item = new InventoryItem("MISSING", "Drill", "Updated", InventoryStatus.AVAILABLE);
         assertThatThrownBy(() -> service.replace(item)).isInstanceOf(InventoryItemNotFoundException.class);
@@ -120,7 +127,7 @@ class InventoryServiceTest {
     void loadsAnExistingItemBeforeDeletingIt() {
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RETIRED);
         when(repository.findById("DRILL-001")).thenReturn(Optional.of(item));
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         service.delete("DRILL-001");
 
@@ -133,11 +140,50 @@ class InventoryServiceTest {
     @Test
     void rejectsDeletionOfAMissingItemWithoutMutation() {
         when(repository.findById("MISSING")).thenReturn(Optional.empty());
-        InventoryService service = new InventoryService(repository);
+        InventoryService service = new InventoryService(repository, historyRepository);
 
         assertThatThrownBy(() -> service.delete("MISSING")).isInstanceOf(InventoryItemNotFoundException.class);
 
         verify(repository).findById("MISSING");
         verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void transitionsALockedItemAndSavesTheCapturedStatusChange() {
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RESERVED);
+        when(repository.findByIdForUpdate("DRILL-001")).thenReturn(Optional.of(item));
+        InventoryService service = new InventoryService(repository, historyRepository);
+
+        service.transitionStatus("DRILL-001", InventoryStatus.RENTED);
+
+        assertThat(item.getStatus()).isEqualTo(InventoryStatus.RENTED);
+        ArgumentCaptor<InventoryStatusHistory> historyCaptor = ArgumentCaptor.forClass(InventoryStatusHistory.class);
+        verify(historyRepository).save(historyCaptor.capture());
+        InventoryStatusHistory history = historyCaptor.getValue();
+        assertThat(history.getSerialNumber()).isEqualTo("DRILL-001");
+        assertThat(history.getStatusFrom()).isEqualTo(InventoryStatus.RESERVED);
+        assertThat(history.getStatusTo()).isEqualTo(InventoryStatus.RENTED);
+        verify(repository).findByIdForUpdate("DRILL-001");
+    }
+
+    @Test
+    void rejectsMissingAndInvalidTransitionsWithoutMutationOrHistory() {
+        when(repository.findByIdForUpdate("MISSING")).thenReturn(Optional.empty());
+        InventoryService service = new InventoryService(repository, historyRepository);
+
+        assertThatThrownBy(() -> service.transitionStatus("MISSING", InventoryStatus.AVAILABLE))
+                .isInstanceOf(InventoryItemNotFoundException.class);
+
+        InventoryItem rented = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RENTED);
+        when(repository.findByIdForUpdate("DRILL-001")).thenReturn(Optional.of(rented));
+        assertThatThrownBy(() -> service.transitionStatus("DRILL-001", InventoryStatus.AVAILABLE))
+                .isInstanceOf(InvalidInventoryStatusTransitionException.class);
+        assertThatThrownBy(() -> service.transitionStatus("DRILL-001", InventoryStatus.RENTED))
+                .isInstanceOf(InvalidInventoryStatusTransitionException.class);
+        assertThatThrownBy(() -> service.transitionStatus("DRILL-001", null))
+                .isInstanceOf(InvalidInventoryStatusTransitionException.class);
+
+        assertThat(rented.getStatus()).isEqualTo(InventoryStatus.RENTED);
+        verifyNoInteractions(historyRepository);
     }
 }

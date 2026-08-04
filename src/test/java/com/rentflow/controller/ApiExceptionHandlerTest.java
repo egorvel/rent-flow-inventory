@@ -14,6 +14,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.ServletWebRequest;
 
 import com.rentflow.dto.ProblemResponse;
+import com.rentflow.model.InventoryStatus;
+import com.rentflow.service.InvalidInventoryStatusTransitionException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -77,6 +79,28 @@ class ApiExceptionHandlerTest {
                         "The request could not be processed.",
                         "/api/v1/inventory",
                         "HTTP_ERROR",
+                        java.util.List.of()));
+    }
+
+    @Test
+    void returnsTheStableInvalidTransitionProblem() {
+        MockHttpServletRequest request = new MockHttpServletRequest("PATCH", "/api/v1/inventory/DRILL-001/status");
+        InvalidInventoryStatusTransitionException exception = new InvalidInventoryStatusTransitionException(
+                "DRILL-001", InventoryStatus.RENTED, InventoryStatus.AVAILABLE);
+
+        ResponseEntity<ProblemResponse> response =
+                handler.handleInvalidTransition(exception, new ServletWebRequest(request));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
+        assertThat(response.getBody())
+                .isEqualTo(new ProblemResponse(
+                        "urn:rentflow:problem:invalid-inventory-status-transition",
+                        "Invalid inventory status transition",
+                        409,
+                        "Inventory item 'DRILL-001' cannot transition from RENTED to AVAILABLE.",
+                        "/api/v1/inventory/DRILL-001/status",
+                        "INVALID_INVENTORY_STATUS_TRANSITION",
                         java.util.List.of()));
     }
 

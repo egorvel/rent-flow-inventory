@@ -30,6 +30,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import com.rentflow.dto.ProblemResponse;
 import com.rentflow.dto.ViolationResponse;
 import com.rentflow.model.InventoryStatus;
+import com.rentflow.service.InvalidInventoryStatusTransitionException;
 import com.rentflow.service.InventoryItemAlreadyExistsException;
 import com.rentflow.service.InventoryItemNotFoundException;
 
@@ -61,6 +62,19 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 "Inventory item already exists",
                 "Inventory item '" + exception.getSerialNumber() + "' already exists.",
                 "INVENTORY_ITEM_ALREADY_EXISTS",
+                request,
+                List.of());
+    }
+
+    @ExceptionHandler(InvalidInventoryStatusTransitionException.class)
+    ResponseEntity<ProblemResponse> handleInvalidTransition(
+            InvalidInventoryStatusTransitionException exception, WebRequest request) {
+        return response(
+                HttpStatus.CONFLICT,
+                "urn:rentflow:problem:invalid-inventory-status-transition",
+                "Invalid inventory status transition",
+                exception.getMessage(),
+                "INVALID_INVENTORY_STATUS_TRANSITION",
                 request,
                 List.of());
     }

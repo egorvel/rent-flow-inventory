@@ -22,6 +22,19 @@ class InventoryItemTest {
     }
 
     @Test
+    void transitionsOnlyTheStatus() {
+        InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RESERVED);
+
+        item.transitionStatus(InventoryStatus.RENTED);
+
+        assertThat(item.getSerialNumber()).isEqualTo("DRILL-001");
+        assertThat(item.getType()).isEqualTo("Drill");
+        assertThat(item.getName()).isEqualTo("Original");
+        assertThat(item.getStatus()).isEqualTo(InventoryStatus.RENTED);
+        assertThatNullPointerException().isThrownBy(() -> item.transitionStatus(null));
+    }
+
+    @Test
     void exposesNoSerialNumberMutator() {
         assertThat(InventoryItem.class.getMethods()).extracting(Method::getName).doesNotContain("setSerialNumber");
     }

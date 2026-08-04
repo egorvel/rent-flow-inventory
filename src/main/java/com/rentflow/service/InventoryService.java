@@ -11,15 +11,19 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
+import com.rentflow.model.InventoryStatusHistory;
 import com.rentflow.repository.InventoryRepository;
+import com.rentflow.repository.InventoryStatusHistoryRepository;
 
 @Service
 public class InventoryService {
 
     private final InventoryRepository repository;
+    private final InventoryStatusHistoryRepository historyRepository;
 
-    public InventoryService(InventoryRepository repository) {
+    public InventoryService(InventoryRepository repository, InventoryStatusHistoryRepository historyRepository) {
         this.repository = repository;
+        this.historyRepository = historyRepository;
     }
 
     @Transactional
@@ -54,6 +58,19 @@ public class InventoryService {
         InventoryItem item =
                 repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
         repository.delete(item);
+    }
+
+    @Transactional
+    public void transitionStatus(String serialNumber, InventoryStatus target) {
+        InventoryItem item = repository
+                .findByIdForUpdate(serialNumber)
+                .orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
+        InventoryStatus statusFrom = item.getStatus();
+        if (!statusFrom.canTransitionTo(target)) {
+            throw new InvalidInventoryStatusTransitionException(serialNumber, statusFrom, target);
+        }
+        item.transitionStatus(target);
+        historyRepository.save(new InventoryStatusHistory(serialNumber, statusFrom, target));
     }
 
     @Transactional(readOnly = true)
