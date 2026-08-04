@@ -1,5 +1,6 @@
 package com.rentflow.service;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,9 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
@@ -18,7 +22,10 @@ import com.rentflow.repository.InventoryStatusHistoryRepository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
@@ -185,5 +192,31 @@ class InventoryServiceTest {
 
         assertThat(rented.getStatus()).isEqualTo(InventoryStatus.RENTED);
         verifyNoInteractions(historyRepository);
+    }
+
+    @Test
+    void delegatesHistoryFilteringPagingAndEveryDeterministicSort() {
+        when(historyRepository.findAll(eq("DRILL"), any(Pageable.class))).thenReturn(Page.empty());
+        InventoryService service = new InventoryService(repository, historyRepository);
+
+        for (InventoryStatusHistorySortField field : InventoryStatusHistorySortField.values()) {
+            service.listStatusHistory(1, 7, "DRILL", field, Sort.Direction.DESC);
+        }
+
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(historyRepository, times(InventoryStatusHistorySortField.values().length))
+                .findAll(eq("DRILL"), pageableCaptor.capture());
+        List<Pageable> pageables = pageableCaptor.getAllValues();
+        for (int index = 0; index < pageables.size(); index++) {
+            Pageable pageable = pageables.get(index);
+            InventoryStatusHistorySortField field = InventoryStatusHistorySortField.values()[index];
+            assertThat(pageable.getPageNumber()).isEqualTo(1);
+            assertThat(pageable.getPageSize()).isEqualTo(7);
+            assertThat(pageable.getSort().toList())
+                    .extracting(Sort.Order::getProperty, Sort.Order::getDirection)
+                    .containsExactly(
+                            org.assertj.core.groups.Tuple.tuple(field.property(), Sort.Direction.DESC),
+                            org.assertj.core.groups.Tuple.tuple("id", Sort.Direction.DESC));
+        }
     }
 }

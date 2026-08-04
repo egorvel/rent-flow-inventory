@@ -88,4 +88,17 @@ public class InventoryService {
         }
         return repository.findAll(status, type, PageRequest.of(page, size, Sort.by(orders)));
     }
+
+    @Transactional(readOnly = true)
+    public Page<InventoryStatusHistory> listStatusHistory(
+            int page,
+            int size,
+            String serialNumber,
+            InventoryStatusHistorySortField sortField,
+            Sort.Direction direction) {
+        ArrayList<Sort.Order> orders = new ArrayList<>();
+        orders.add(new Sort.Order(direction, sortField.property()));
+        orders.add(new Sort.Order(direction, "id"));
+        return historyRepository.findAll(serialNumber, PageRequest.of(page, size, Sort.by(orders)));
+    }
 }

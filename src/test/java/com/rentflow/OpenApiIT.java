@@ -53,7 +53,7 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     @Test
-    void exposesOnlyTheSixUnauthenticatedInventoryOperations() {
+    void exposesOnlyTheSevenUnauthenticatedInventoryOperations() {
         assertThat(document.path("openapi").asString()).startsWith("3.");
         assertThat(document.at("/info/title").asString()).isEqualTo("RentFlow Inventory API");
         assertThat(document.at("/info/version").asString()).isEqualTo("v1");
@@ -63,6 +63,7 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(names(paths))
                 .containsExactlyInAnyOrder(
                         "/api/v1/inventory",
+                        "/api/v1/inventory-history",
                         "/api/v1/inventory/{serialNumber}",
                         "/api/v1/inventory/{serialNumber}/status");
         assertThat(operation("/api/v1/inventory", "post").path("operationId").asString())
@@ -85,6 +86,10 @@ class OpenApiIT extends PostgresIntegrationTest {
                         .path("operationId")
                         .asString())
                 .isEqualTo("transitionInventoryStatus");
+        assertThat(operation("/api/v1/inventory-history", "get")
+                        .path("operationId")
+                        .asString())
+                .isEqualTo("listInventoryStatusHistory");
         assertThat(paths.path("/api/v1/inventory").has("patch")).isFalse();
         assertThat(paths.path("/api/v1/inventory/{serialNumber}").has("patch")).isFalse();
         assertThat(names(paths.path("/api/v1/inventory/{serialNumber}/status"))).containsExactly("patch");
@@ -128,6 +133,18 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(enumValues(
                         schema("InventoryStatusUpdateDTO").path("properties").path("status")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_STATUSES);
+        assertSchemaProperties(
+                "InventoryStatusHistoryDTO", Set.of("serialNumber", "statusFrom", "statusTo", "timestamp"));
+        assertThat(schema("InventoryStatusHistoryDTO").path("properties").has("id"))
+                .isFalse();
+        assertThat(texts(schema("InventoryStatusHistoryDTO").path("required")))
+                .containsExactlyInAnyOrder("serialNumber", "statusFrom", "statusTo", "timestamp");
+        assertThat(resolved(schema("InventoryStatusHistoryDTO")
+                                .path("properties")
+                                .path("timestamp"))
+                        .path("format")
+                        .asString())
+                .isEqualTo("date-time");
 
         JsonNode pageResponse = resolved(
                 responseSchema(operation("/api/v1/inventory", "get"), "200", MediaType.APPLICATION_JSON_VALUE));
@@ -138,6 +155,14 @@ class OpenApiIT extends PostgresIntegrationTest {
         JsonNode pageMetadata = resolved(pageResponse.path("properties").path("page"));
         assertThat(names(pageMetadata.path("properties")))
                 .containsExactlyInAnyOrder("size", "number", "totalElements", "totalPages");
+        JsonNode historyPageResponse = resolved(
+                responseSchema(operation("/api/v1/inventory-history", "get"), "200", MediaType.APPLICATION_JSON_VALUE));
+        assertThat(names(historyPageResponse.path("properties"))).containsExactlyInAnyOrder("content", "page");
+        assertThat(resolved(historyPageResponse.path("properties").path("content"))
+                        .path("items")
+                        .path("$ref")
+                        .asString())
+                .endsWith("/InventoryStatusHistoryDTO");
         assertSchemaProperties(
                 "ProblemResponse", Set.of("type", "title", "status", "detail", "instance", "code", "violations"));
         assertThat(texts(schema("ProblemResponse").path("required")))
@@ -174,6 +199,28 @@ class OpenApiIT extends PostgresIntegrationTest {
                         .asString())
                 .isEqualTo("asc");
         assertThat(enumValues(parameter(list, "direction").path("schema"))).containsExactlyInAnyOrder("asc", "desc");
+
+        JsonNode historyList = operation("/api/v1/inventory-history", "get");
+        assertThat(parameterNames(historyList))
+                .containsExactlyInAnyOrder("page", "size", "serialNumber", "sort", "direction");
+        assertParameter(parameter(historyList, "page"), "0", "0", null);
+        assertParameter(parameter(historyList, "size"), "20", "1", "100");
+        assertThat(resolved(parameter(historyList, "serialNumber").path("schema"))
+                        .path("maxLength")
+                        .asInt())
+                .isEqualTo(64);
+        assertThat(resolved(parameter(historyList, "sort").path("schema"))
+                        .path("default")
+                        .asString())
+                .isEqualTo("timestamp");
+        assertThat(enumValues(parameter(historyList, "sort").path("schema")))
+                .containsExactlyInAnyOrder("serialNumber", "statusFrom", "statusTo", "timestamp");
+        assertThat(resolved(parameter(historyList, "direction").path("schema"))
+                        .path("default")
+                        .asString())
+                .isEqualTo("desc");
+        assertThat(enumValues(parameter(historyList, "direction").path("schema")))
+                .containsExactlyInAnyOrder("asc", "desc");
 
         for (String method : List.of("get", "put", "delete")) {
             JsonNode serialParameter = parameter(operation("/api/v1/inventory/{serialNumber}", method), "serialNumber");
@@ -222,12 +269,18 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertResponseCodes(transition, "204", "400", "404", "406", "409", "415", "500");
         assertThat(transition.at("/responses/204").has("content")).isFalse();
 
+        JsonNode history = operation("/api/v1/inventory-history", "get");
+        assertResponseCodes(history, "200", "400", "406", "500");
+        JsonNode historyPage = resolved(responseSchema(history, "200", MediaType.APPLICATION_JSON_VALUE));
+        assertThat(names(historyPage.path("properties"))).containsExactlyInAnyOrder("content", "page");
+
         assertProblemSchemas(create, Set.of("400", "406", "409", "415", "500"));
         assertProblemSchemas(list, Set.of("400", "406", "500"));
         assertProblemSchemas(get, Set.of("400", "404", "406", "500"));
         assertProblemSchemas(replace, Set.of("400", "404", "406", "415", "500"));
         assertProblemSchemas(delete, Set.of("400", "404", "500"));
         assertProblemSchemas(transition, Set.of("400", "404", "406", "409", "415", "500"));
+        assertProblemSchemas(history, Set.of("400", "406", "500"));
     }
 
     @Test
@@ -264,7 +317,8 @@ class OpenApiIT extends PostgresIntegrationTest {
                 operation("/api/v1/inventory/{serialNumber}", "get"),
                 operation("/api/v1/inventory/{serialNumber}", "put"),
                 operation("/api/v1/inventory/{serialNumber}", "delete"),
-                operation("/api/v1/inventory/{serialNumber}/status", "patch"));
+                operation("/api/v1/inventory/{serialNumber}/status", "patch"),
+                operation("/api/v1/inventory-history", "get"));
     }
 
     private JsonNode schema(String name) {

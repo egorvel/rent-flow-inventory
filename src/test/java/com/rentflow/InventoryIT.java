@@ -1,6 +1,7 @@
 package com.rentflow;
 
 import java.net.URI;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -457,6 +458,128 @@ class InventoryIT extends PostgresIntegrationTest {
     }
 
     @Test
+    void returnsTheDefaultHistoryPageWithOnlyPublicFields() throws Exception {
+        insertHistory(
+                "DRILL-001",
+                InventoryStatus.AVAILABLE,
+                InventoryStatus.RESERVED,
+                Instant.parse("2026-08-04T10:00:00Z"));
+        insertHistory(
+                "DRILL-001", InventoryStatus.RESERVED, InventoryStatus.RENTED, Instant.parse("2026-08-04T11:00:00Z"));
+        insertHistory(
+                "MIXER-001",
+                InventoryStatus.RENTED,
+                InventoryStatus.INSPECTION_REQUIRED,
+                Instant.parse("2026-08-04T12:00:00Z"));
+
+        mockMvc.perform(get("/api/v1/inventory-history"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$", aMapWithSize(2)))
+                .andExpect(jsonPath("$.content", hasSize(3)))
+                .andExpect(jsonPath("$.content[0]", aMapWithSize(4)))
+                .andExpect(jsonPath("$.content[0].serialNumber").value("MIXER-001"))
+                .andExpect(jsonPath("$.content[0].statusFrom").value("RENTED"))
+                .andExpect(jsonPath("$.content[0].statusTo").value("INSPECTION_REQUIRED"))
+                .andExpect(jsonPath("$.content[0].timestamp").value("2026-08-04T12:00:00Z"))
+                .andExpect(jsonPath("$.content[0].id").doesNotExist())
+                .andExpect(jsonPath("$.page.number").value(0))
+                .andExpect(jsonPath("$.page.size").value(20))
+                .andExpect(jsonPath("$.page.totalElements").value(3))
+                .andExpect(jsonPath("$.page.totalPages").value(1));
+    }
+
+    @Test
+    void usesTheInternalIdentityAsTheSameDirectionSortTieBreaker() throws Exception {
+        Instant timestamp = Instant.parse("2026-08-04T10:00:00Z");
+        insertHistory("A-100", InventoryStatus.AVAILABLE, InventoryStatus.RESERVED, timestamp);
+        insertHistory("B-200", InventoryStatus.AVAILABLE, InventoryStatus.RENTED, timestamp);
+
+        mockMvc.perform(get("/api/v1/inventory-history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("B-200", "A-100")));
+        mockMvc.perform(get("/api/v1/inventory-history")
+                        .param("sort", "timestamp")
+                        .param("direction", "asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("A-100", "B-200")));
+    }
+
+    @Test
+    void paginatesAndAppliesCaseSensitiveLiteralSerialFiltering() throws Exception {
+        insertHistory(
+                "DRILL_001",
+                InventoryStatus.AVAILABLE,
+                InventoryStatus.RESERVED,
+                Instant.parse("2026-08-04T10:00:00Z"));
+        insertHistory(
+                "DRILL-002", InventoryStatus.AVAILABLE, InventoryStatus.RENTED, Instant.parse("2026-08-04T11:00:00Z"));
+        insertHistory(
+                "drill-003", InventoryStatus.AVAILABLE, InventoryStatus.RETIRED, Instant.parse("2026-08-04T12:00:00Z"));
+
+        mockMvc.perform(get("/api/v1/inventory-history")
+                        .param("serialNumber", "DRILL")
+                        .param("page", "1")
+                        .param("size", "1")
+                        .param("sort", "serialNumber")
+                        .param("direction", "asc"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("DRILL_001")))
+                .andExpect(jsonPath("$.page.totalElements").value(2))
+                .andExpect(jsonPath("$.page.totalPages").value(2));
+        mockMvc.perform(get("/api/v1/inventory-history").param("serialNumber", "drill"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("drill-003")));
+        mockMvc.perform(get("/api/v1/inventory-history").param("serialNumber", "_"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("DRILL_001")));
+        mockMvc.perform(get("/api/v1/inventory-history").param("serialNumber", "%"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content", empty()));
+        mockMvc.perform(get("/api/v1/inventory-history").param("serialNumber", "\\"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content", empty()));
+    }
+
+    @ParameterizedTest
+    @MethodSource("historySortCases")
+    void sortsHistoryByEveryPublicFieldInBothDirections(String field, String direction, List<String> expectedSerials)
+            throws Exception {
+        seedHistoryForSorting();
+
+        mockMvc.perform(get("/api/v1/inventory-history").param("sort", field).param("direction", direction))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].serialNumber", contains(expectedSerials.toArray())));
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidHistoryQueries")
+    void rejectsInvalidHistoryQueries(String query, String field) throws Exception {
+        expectValidation(mockMvc.perform(get("/api/v1/inventory-history?" + query)), "/api/v1/inventory-history")
+                .andExpect(jsonPath("$.violations[0].field").value(field));
+    }
+
+    @Test
+    void keepsDeletedItemHistoryAndDoesNotShadowTheHistorySerialNumber() throws Exception {
+        repository.saveAndFlush(new InventoryItem("DRILL-AUDIT", "Drill", "Audit", InventoryStatus.AVAILABLE));
+        mockMvc.perform(patch("/api/v1/inventory/DRILL-AUDIT/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(statusUpdateRequest(InventoryStatus.RESERVED)))
+                .andExpect(status().isNoContent());
+        mockMvc.perform(delete("/api/v1/inventory/DRILL-AUDIT")).andExpect(status().isNoContent());
+
+        mockMvc.perform(get("/api/v1/inventory-history").param("serialNumber", "DRILL-AUDIT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].serialNumber", contains("DRILL-AUDIT")));
+
+        repository.saveAndFlush(new InventoryItem("history", "Drill", "Route check", InventoryStatus.AVAILABLE));
+        mockMvc.perform(get("/api/v1/inventory/history"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.serialNumber").value("history"));
+        mockMvc.perform(get("/api/v1/inventory-history")).andExpect(status().isOk());
+    }
+
+    @Test
     void returnsDefaultPageWithDeterministicOrderWithoutCredentials() throws Exception {
         seedInventory();
 
@@ -730,6 +853,7 @@ class InventoryIT extends PostgresIntegrationTest {
                         .content(validationRequest("NOAUTH-001", "AVAILABLE")))
                 .andExpect(status().isCreated());
         mockMvc.perform(get("/api/v1/inventory")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/v1/inventory-history")).andExpect(status().isOk());
         mockMvc.perform(get("/api/v1/inventory/NOAUTH-001")).andExpect(status().isOk());
         mockMvc.perform(put("/api/v1/inventory/NOAUTH-001")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -792,6 +916,32 @@ class InventoryIT extends PostgresIntegrationTest {
                 item("D-400", "Jackhammer", "Delta", InventoryStatus.RESERVED)));
     }
 
+    private void seedHistoryForSorting() {
+        insertHistory(
+                "C-300",
+                InventoryStatus.RENTED,
+                InventoryStatus.INSPECTION_REQUIRED,
+                Instant.parse("2026-08-04T10:00:00Z"));
+        insertHistory(
+                "D-400",
+                InventoryStatus.INSPECTION_REQUIRED,
+                InventoryStatus.RETIRED,
+                Instant.parse("2026-08-04T11:00:00Z"));
+        insertHistory(
+                "B-200", InventoryStatus.RESERVED, InventoryStatus.AVAILABLE, Instant.parse("2026-08-04T12:00:00Z"));
+        insertHistory(
+                "A-100", InventoryStatus.AVAILABLE, InventoryStatus.RENTED, Instant.parse("2026-08-04T13:00:00Z"));
+    }
+
+    private void insertHistory(
+            String serialNumber, InventoryStatus statusFrom, InventoryStatus statusTo, Instant timestamp) {
+        jdbcTemplate.update("""
+                        INSERT INTO inventory.inventory_status_history
+                            (serial_number, status_from, status_to, transitioned_at)
+                        VALUES (?, ?, ?, ?)
+                        """, serialNumber, statusFrom.name(), statusTo.name(), Timestamp.from(timestamp));
+    }
+
     private static Stream<Arguments> sortCases() {
         return Stream.of(
                 Arguments.of("serialNumber", "asc", List.of("A-100", "B-200", "C-300", "D-400")),
@@ -829,6 +979,33 @@ class InventoryIT extends PostgresIntegrationTest {
             case UNDER_MAINTENANCE -> target == InventoryStatus.AVAILABLE || target == InventoryStatus.RETIRED;
             case RETIRED -> false;
         };
+    }
+
+    private static Stream<Arguments> historySortCases() {
+        return Stream.of(
+                Arguments.of("serialNumber", "asc", List.of("A-100", "B-200", "C-300", "D-400")),
+                Arguments.of("serialNumber", "DESC", List.of("D-400", "C-300", "B-200", "A-100")),
+                Arguments.of("statusFrom", "asc", List.of("A-100", "D-400", "C-300", "B-200")),
+                Arguments.of("statusFrom", "desc", List.of("B-200", "C-300", "D-400", "A-100")),
+                Arguments.of("statusTo", "asc", List.of("B-200", "C-300", "A-100", "D-400")),
+                Arguments.of("statusTo", "desc", List.of("D-400", "A-100", "C-300", "B-200")),
+                Arguments.of("timestamp", "asc", List.of("C-300", "D-400", "B-200", "A-100")),
+                Arguments.of("timestamp", "desc", List.of("A-100", "B-200", "D-400", "C-300")));
+    }
+
+    private static Stream<Arguments> invalidHistoryQueries() {
+        return Stream.of(
+                Arguments.of("page=-1", "page"),
+                Arguments.of("page=not-a-number", "page"),
+                Arguments.of("size=0", "size"),
+                Arguments.of("size=101", "size"),
+                Arguments.of("size=not-a-number", "size"),
+                Arguments.of("serialNumber=", "serialNumber"),
+                Arguments.of("serialNumber=" + "S".repeat(65), "serialNumber"),
+                Arguments.of("sort=unknown", "sort"),
+                Arguments.of("direction=sideways", "direction"),
+                Arguments.of("unknown=value", "unknown"),
+                Arguments.of("page=0&page=1", "page"));
     }
 
     private static Stream<String> invalidQueries() {
