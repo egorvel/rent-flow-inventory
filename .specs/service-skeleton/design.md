@@ -827,7 +827,7 @@ Maven Wrapper 3.3.4 uses its script-only distribution and downloads Maven 3.9.16
 properties include the Maven distribution SHA-256 checksum. The repository commits `mvnw`,
 `mvnw.cmd`, and `.mvn/wrapper/maven-wrapper.properties`; no wrapper JAR is required.
 
-Both `mvn -B -ntp clean verify` and `./mvnw -B -ntp verify` run the same lifecycle. Project invariants
+Both `mvn -B -ntp clean verify` and `./mvnw -B -ntp clean verify` run the same lifecycle. Project invariants
 continue to use the former when Maven is installed.
 
 ### 10.4 README

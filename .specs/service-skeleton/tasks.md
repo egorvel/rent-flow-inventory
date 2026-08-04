@@ -12,7 +12,7 @@ make that increment reproducible.
   tests that prove it.
 - Complete one task, satisfy its entire DoD, and create its proposed commit before starting the
   next task.
-- Run `mvn -B -ntp verify` without skip flags before every commit. If Spotless fails, run
+- Run `mvn -B -ntp clean verify` without skip flags before every commit. If Spotless fails, run
   `mvn spotless:apply` and repeat the full verification command.
 - T10 also runs `mvn -B -ntp clean verify`, the Maven Wrapper lifecycle, and the container smoke
   script as final clean-checkout acceptance.
@@ -67,7 +67,7 @@ at any task boundary builds and its implemented behavior remains covered.
   reports Maven 3.9.16 and the configured wrapper distribution checksum is non-empty.
 - `mvn -B -ntp package` creates the executable `target/inventory.jar`, and the archive identifies
   `InventoryApplication` as the Spring Boot entry point.
-- `mvn -B -ntp verify` succeeds with Enforcer, unit-test discovery, integration-test discovery,
+- `mvn -B -ntp clean verify` succeeds with Enforcer, unit-test discovery, integration-test discovery,
   and the Palantir-backed Spotless check active; no test or formatting skip flag is used.
 
 ### T2 - Establish Inventory-owned persistence
@@ -105,7 +105,7 @@ at any task boundary builds and its implemented behavior remains covered.
   inaccessible `inventory` schema fails before readiness can be established.
 - No `schema.sql`, `data.sql`, `import.sql`, Hibernate schema-generation mode, or migration that
   creates the database, login role, or service schema is present.
-- `mvn -B -ntp verify` succeeds with the unit and real-PostgreSQL integration tests.
+- `mvn -B -ntp clean verify` succeeds with the unit and real-PostgreSQL integration tests.
 
 ### T3 - Deliver create and retrieve operations
 
@@ -143,7 +143,7 @@ and AC12.1; `design.md` §2.1-§2.3, §3.1-§3.2, §4.3-§4.4, §5.1-§5.3,
   detail.
 - All slice errors use `application/problem+json` with the required stable fields; validation
   errors include deterministic field violations.
-- `mvn -B -ntp verify` succeeds with the unit and full-stack PostgreSQL tests.
+- `mvn -B -ntp clean verify` succeeds with the unit and full-stack PostgreSQL tests.
 
 ### T4 - Deliver bounded catalogue browsing
 
@@ -178,7 +178,7 @@ and AC12.1; `design.md` §2.1-§2.3, §3.1-§3.2, §4.3-§4.4, §5.1-§5.3,
 - Type matching remains exact rather than substring-based, stored capitalization is preserved,
   and status matching accepts only exact uppercase enum names.
 - The endpoint accepts the functional requests without authentication credentials.
-- `mvn -B -ntp verify` succeeds with the full query matrix against PostgreSQL.
+- `mvn -B -ntp clean verify` succeeds with the full query matrix against PostgreSQL.
 
 ### T5 - Deliver replace and delete operations
 
@@ -209,7 +209,7 @@ and AC12.1; `design.md` §3.4-§3.5, §4.4, §5.1-§5.3, §6, §11.1-§11.2, §1
   return `404`; deleting a missing item returns `404`.
 - Replacement and deletion work without authentication credentials and their failures use the
   existing Problem Details contract.
-- `mvn -B -ntp verify` succeeds with unit and PostgreSQL full-stack coverage.
+- `mvn -B -ntp clean verify` succeeds with unit and PostgreSQL full-stack coverage.
 
 ### T6 - Complete the error contract and architectural boundaries
 
@@ -249,7 +249,7 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
 - `ArchitectureTest` enforces all package dependencies, no cycles, suffix and placement rules,
   controller-to-repository prohibition, and exclusive ownership of MVC mapping annotations by
   controllers.
-- `mvn -B -ntp verify` succeeds with unit, integration, architecture, and formatting checks.
+- `mvn -B -ntp clean verify` succeeds with unit, integration, architecture, and formatting checks.
 
 ### T7 - Publish and lock the OpenAPI contract
 
@@ -276,7 +276,7 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
   and applicable documented problem responses are present.
 - Inventory-item and Problem Details examples are present and validate against their declared
   schemas.
-- `mvn -B -ntp verify` succeeds, and changing an API path, operation, enum, schema property, or
+- `mvn -B -ntp clean verify` succeeds, and changing an API path, operation, enum, schema property, or
   documented response causes `OpenApiIT` to fail.
 
 ### T8 - Add operational health semantics
@@ -302,7 +302,7 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
   validation prevents an accepting application context.
 - Live healthy-probe, database-outage, liveness-independence, readiness-recovery, and persisted-data
   acceptance is owned by T9's container smoke test rather than duplicated in a Maven health IT.
-- `mvn -B -ntp verify` succeeds with the operational configuration and existing startup-failure
+- `mvn -B -ntp clean verify` succeeds with the operational configuration and existing startup-failure
   coverage active.
 
 ### T9 - Package and smoke-test the container stack
@@ -342,7 +342,7 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
 - The smoke script uses strict shell mode, bounded health polling, and a cleanup trap; its output
   contains no environment secret. `bash -n scripts/container-smoke-test.sh` and
   `bash -n docker/postgres/init-inventory.sh` succeed.
-- `mvn -B -ntp verify` succeeds before the commit; no container verification uses a test,
+- `mvn -B -ntp clean verify` succeeds before the commit; no container verification uses a test,
   formatting, or build skip flag.
 
 ### T10 - Document workflows and complete clean acceptance
@@ -370,7 +370,7 @@ AC11.4-AC11.5, and AC12.1-AC12.2; `design.md` §1.2-§1.3, §2.1-§2.2,
   variable, and artifact.
 - Executable `curl` examples cover create, retrieve, filtered/sorted list, replace, and delete with
   payloads that satisfy the implemented contract.
-- `./mvnw -B -ntp verify`, `mvn -B -ntp verify`, and `mvn -B -ntp clean verify` all succeed on
+- `./mvnw -B -ntp clean verify`, `mvn -B -ntp clean verify`, and `mvn -B -ntp clean verify` all succeed on
   Java 25 with formatting, unit, PostgreSQL integration, architecture, and OpenAPI checks active.
 - `scripts/container-smoke-test.sh` succeeds from a clean checkout and leaves no running project
   containers; the persisted-volume behavior is exercised before cleanup.

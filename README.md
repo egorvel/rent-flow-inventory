@@ -233,7 +233,7 @@ running.
 The Maven Wrapper executes the same lifecycle without a separately installed Maven distribution:
 
 ```bash
-./mvnw -B -ntp verify
+./mvnw -B -ntp clean verify
 ```
 
 Apply the pinned formatter and then rerun verification when Spotless reports a failure:

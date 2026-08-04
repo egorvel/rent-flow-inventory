@@ -321,7 +321,7 @@ so that authentication concerns do not block validation of the service skeleton.
     `tasks.md` §1 and §2.
 16. **Task granularity:** The implementation is decomposed into ten ordered tasks, each producing
     one independently verifiable commit. See `tasks.md` §2 and §3.
-17. **Per-task verification:** Every implementation task runs `mvn -B -ntp verify` before its
+17. **Per-task verification:** Every implementation task runs `mvn -B -ntp clean verify` before its
     commit; final acceptance additionally runs the clean lifecycle. See `tasks.md` §1 and T10.
 18. **Container smoke automation:** Container acceptance is encoded in the executable
     `scripts/container-smoke-test.sh` rather than being only a manual README checklist. See
