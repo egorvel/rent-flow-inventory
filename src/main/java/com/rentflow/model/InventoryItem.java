@@ -49,8 +49,8 @@ public class InventoryItem {
         return status;
     }
 
-    public void transitionStatus(InventoryStatus target) {
-        status = Objects.requireNonNull(target, "target must not be null");
+    public void setStatus(InventoryStatus target) {
+        status = Objects.requireNonNull(target, "Status must not be null");
     }
 
     public void replaceDetails(InventoryItem item) {

@@ -80,7 +80,7 @@ problem path; a missing or null `status` follows Bean Validation; an unknown enu
 existing invalid-`InventoryStatus` mapping.
 
 The controller passes `serialNumber` and `request.status()` to
-`InventoryService.transitionStatus`. A successful call returns
+`InventoryService.setStatus`. A successful call returns
 `ResponseEntity.noContent().build()` and has no response content or `Content-Type`.
 
 | Result | Status | Body |
@@ -211,7 +211,7 @@ source of transition truth; the controller and service do not reproduce status-p
 
 ### 3.2 Inventory entity mutation and unchanged replacement
 
-`InventoryItem` gains a dedicated `transitionStatus(InventoryStatus target)` mutation method. The
+`InventoryItem` gains a dedicated `setStatus(InventoryStatus target)` mutation method. The
 service calls it only after `item.getStatus().canTransitionTo(target)` succeeds. It changes only
 the `status` field and requires a non-null target.
 
@@ -223,16 +223,16 @@ contract.
 
 ### 3.3 Transition transaction and locking
 
-`InventoryService.transitionStatus(String serialNumber, InventoryStatus target)` is
+`InventoryService.setStatus(String serialNumber, InventoryStatus target)` is
 `@Transactional` and performs these steps in order:
 
-1. Load the inventory item through `InventoryRepository.findByIdForUpdate`, which uses
-   `@Lock(LockModeType.PESSIMISTIC_WRITE)` and a query by serial number.
+1. Load the inventory item through `InventoryRepository.findForUpdateBySerialNumber`, a derived
+   query method using `@Lock(LockModeType.PESSIMISTIC_WRITE)`.
 2. Throw the existing `InventoryItemNotFoundException` if no row exists.
 3. Capture the managed item's current status as `statusFrom`.
 4. Evaluate `statusFrom.canTransitionTo(target)`.
 5. If false, throw `InvalidInventoryStatusTransitionException` before mutation or history insert.
-6. Call `item.transitionStatus(target)` on the managed entity.
+6. Call `item.setStatus(target)` on the managed entity.
 7. Persist one new `InventoryStatusHistory(serialNumber, statusFrom, target)` through the history
    repository.
 8. Let transaction commit flush both the managed-item update and history insert.
@@ -352,7 +352,7 @@ to find rows whose item was deleted.
 
 ### 4.4 Retention and immutability
 
-Production code inserts history only in `InventoryService.transitionStatus`. It never updates or
+Production code inserts history only in `InventoryService.setStatus`. It never updates or
 deletes history, and no API operation exposes those actions. Entity immutability and non-updatable
 column mappings prevent dirty-checking updates. The absence of an item foreign key preserves rows
 through `InventoryService.delete` and through direct deletion of an Inventory-owned item row.

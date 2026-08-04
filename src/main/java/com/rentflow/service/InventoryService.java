@@ -63,13 +63,13 @@ public class InventoryService {
     @Transactional
     public void transitionStatus(String serialNumber, InventoryStatus target) {
         InventoryItem item = repository
-                .findByIdForUpdate(serialNumber)
+                .findForUpdateBySerialNumber(serialNumber)
                 .orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
         InventoryStatus statusFrom = item.getStatus();
         if (!statusFrom.canTransitionTo(target)) {
             throw new InvalidInventoryStatusTransitionException(serialNumber, statusFrom, target);
         }
-        item.transitionStatus(target);
+        item.setStatus(target);
         historyRepository.save(new InventoryStatusHistory(serialNumber, statusFrom, target));
     }
 

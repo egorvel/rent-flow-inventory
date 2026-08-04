@@ -96,7 +96,7 @@ AC5.1-AC5.4; `design.md` §2.1, §2.3-§2.4, §3.1-§3.3, §5, §7, §8.1-§8.3.
 **Scope.**
 
 - Add the exhaustive `InventoryStatus.canTransitionTo` behavior and the dedicated
-  `InventoryItem.transitionStatus` mutation while leaving `replaceDetails` unchanged.
+  `InventoryItem.setStatus` mutation while leaving `replaceDetails` unchanged.
 - Add the pessimistically locked repository lookup, `InventoryStatusUpdateDTO`, service-layer
   invalid-transition exception, transactional service orchestration, and one history insert per
   successful transition.
@@ -112,8 +112,8 @@ AC5.1-AC5.4; `design.md` §2.1, §2.3-§2.4, §3.1-§3.3, §5, §7, §8.1-§8.3.
   pair is false, and every transition from `RETIRED` is false.
 - `InventoryItemTest` proves the dedicated mutation changes only status, while the existing
   replacement method still accepts every defined target without consulting the matrix.
-- `InventoryServiceTest` uses Mockito to prove `transitionStatus` loads through
-  `findByIdForUpdate`, captures the actual previous status, mutates the managed item, and saves
+- `InventoryServiceTest` uses Mockito to prove `setStatus` loads through
+  `findForUpdateBySerialNumber`, captures the actual previous status, mutates the managed item, and saves
   exactly one history entity with the correct serial/source/target values in the allowed case.
 - The same unit suite proves not-found, null, same-status, and disallowed paths do not mutate the
   item or save history; existing create, get, list, replace, and delete tests remain green, and

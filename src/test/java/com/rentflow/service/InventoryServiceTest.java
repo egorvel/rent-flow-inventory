@@ -158,7 +158,7 @@ class InventoryServiceTest {
     @Test
     void transitionsALockedItemAndSavesTheCapturedStatusChange() {
         InventoryItem item = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RESERVED);
-        when(repository.findByIdForUpdate("DRILL-001")).thenReturn(Optional.of(item));
+        when(repository.findForUpdateBySerialNumber("DRILL-001")).thenReturn(Optional.of(item));
         InventoryService service = new InventoryService(repository, historyRepository);
 
         service.transitionStatus("DRILL-001", InventoryStatus.RENTED);
@@ -170,19 +170,19 @@ class InventoryServiceTest {
         assertThat(history.getSerialNumber()).isEqualTo("DRILL-001");
         assertThat(history.getStatusFrom()).isEqualTo(InventoryStatus.RESERVED);
         assertThat(history.getStatusTo()).isEqualTo(InventoryStatus.RENTED);
-        verify(repository).findByIdForUpdate("DRILL-001");
+        verify(repository).findForUpdateBySerialNumber("DRILL-001");
     }
 
     @Test
     void rejectsMissingAndInvalidTransitionsWithoutMutationOrHistory() {
-        when(repository.findByIdForUpdate("MISSING")).thenReturn(Optional.empty());
+        when(repository.findForUpdateBySerialNumber("MISSING")).thenReturn(Optional.empty());
         InventoryService service = new InventoryService(repository, historyRepository);
 
         assertThatThrownBy(() -> service.transitionStatus("MISSING", InventoryStatus.AVAILABLE))
                 .isInstanceOf(InventoryItemNotFoundException.class);
 
         InventoryItem rented = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RENTED);
-        when(repository.findByIdForUpdate("DRILL-001")).thenReturn(Optional.of(rented));
+        when(repository.findForUpdateBySerialNumber("DRILL-001")).thenReturn(Optional.of(rented));
         assertThatThrownBy(() -> service.transitionStatus("DRILL-001", InventoryStatus.AVAILABLE))
                 .isInstanceOf(InvalidInventoryStatusTransitionException.class);
         assertThatThrownBy(() -> service.transitionStatus("DRILL-001", InventoryStatus.RENTED))
