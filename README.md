@@ -7,8 +7,9 @@ The Inventory service owns the RentFlow equipment catalogue. Each inventory item
 - One of these statuses: `AVAILABLE`, `RESERVED`, `RENTED`, `INSPECTION_REQUIRED`,
   `UNDER_MAINTENANCE`, or `RETIRED`.
 
-The REST API supports creating, retrieving, filtering, sorting, replacing, and permanently deleting
-inventory items.
+The REST API supports creating, retrieving, filtering, sorting, replacing, permanently deleting,
+and lifecycle-transitioning inventory items. Successful lifecycle transitions are retained in a
+separately browsable status-history collection.
 
 ## Prerequisites
 
@@ -153,6 +154,7 @@ With the service running locally:
 | Resource | URL |
 | --- | --- |
 | Inventory API | `http://localhost:8080/api/v1/inventory` |
+| Inventory status history | `http://localhost:8080/api/v1/inventory-history` |
 | Swagger UI | `http://localhost:8080/swagger-ui.html` |
 | OpenAPI document | `http://localhost:8080/v3/api-docs` |
 | Liveness | `http://localhost:8080/livez` |
@@ -192,6 +194,55 @@ List available industrial drills, sorted by name:
 curl --fail-with-body \
   'http://localhost:8080/api/v1/inventory?page=0&size=20&status=AVAILABLE&type=Industrial%20drill&sort=name&direction=asc'
 ```
+
+Transition the item from `AVAILABLE` to `RESERVED`. A successful transition returns `204 No
+Content`, changes only the status, and creates one history record:
+
+```bash
+curl --fail-with-body \
+  --request PATCH \
+  --output /dev/null \
+  --write-out '%{http_code}\n' \
+  'http://localhost:8080/api/v1/inventory/DRILL-001/status' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "status": "RESERVED"
+  }'
+```
+
+Attempt a disallowed transition from `RESERVED` to `RETIRED`. It returns `409 Conflict` with the
+problem code `INVALID_INVENTORY_STATUS_TRANSITION` and changes neither the item nor its history:
+
+```bash
+curl --include \
+  --request PATCH \
+  'http://localhost:8080/api/v1/inventory/DRILL-001/status' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "status": "RETIRED"
+  }'
+```
+
+Browse status history using the defaults `page=0`, `size=20`, `sort=timestamp`, and
+`direction=desc`:
+
+```bash
+curl --fail-with-body \
+  'http://localhost:8080/api/v1/inventory-history'
+```
+
+Each history record exposes exactly `serialNumber`, `statusFrom`, `statusTo`, and `timestamp`.
+Filter by a case-sensitive literal serial-number substring and sort by any of `serialNumber`,
+`statusFrom`, `statusTo`, or `timestamp` in either direction:
+
+```bash
+curl --fail-with-body \
+  'http://localhost:8080/api/v1/inventory-history?page=0&size=20&serialNumber=DRILL&sort=statusFrom&direction=asc'
+```
+
+History pages allow sizes from `1` through `100`. The default order is newest first, with an
+internal deterministic tie-breaker that is not exposed by the API. History remains available after
+the corresponding inventory item is deleted.
 
 Fully replace its mutable values. The body serial number must match the path:
 
