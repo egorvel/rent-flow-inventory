@@ -1,6 +1,6 @@
 # Inventory Status Transition Design
 
-Status: Design defined; implementation tasks pending.
+Status: Requirements, design, and implementation tasks defined; ready for implementation.
 
 ## 1. Scope and architecture
 

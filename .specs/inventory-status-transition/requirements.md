@@ -1,6 +1,6 @@
 # Inventory Status Transition Requirements
 
-Status: Requirements and design defined; implementation tasks pending.
+Status: Requirements, design, and implementation tasks defined; ready for implementation.
 
 ## Context
 
@@ -225,3 +225,17 @@ my integration can invoke them and diagnose rejected requests.
     and §3.4.
 13. **Deleted-item visibility:** Preserved history remains visible after its inventory item is
     deleted. This is reflected in AC2.4 and AC3.9. See `design.md` §4.4.
+14. **Implementation sequence:** Delivery uses four linear, independently verified commits for
+    persistence, transition, history browsing, and final documentation/acceptance. See `tasks.md`
+    §2 and §3.
+15. **Vertical endpoint increments:** The transition and history collection operations each ship
+    with their service, controller, persistence collaboration, and tests in one safe commit. See
+    `tasks.md` T2 and T3.
+16. **Contract-test placement:** `OpenApiIT` changes in the same task as each endpoint so no
+    intermediate commit carries a stale or failing generated-contract assertion. See `tasks.md`
+    §1, T2, and T3.
+17. **Concurrency verification:** The pessimistic-lock concurrency test belongs to the transition
+    increment that introduces the locking behavior. See `tasks.md` T2.
+18. **Final acceptance:** Documentation and traceability use a final commit, and acceptance runs
+    `mvn -B -ntp clean verify` without rerunning the unchanged container smoke suite. See
+    `tasks.md` §1 and T4.
