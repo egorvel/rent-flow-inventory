@@ -8,6 +8,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.WebApplicationType;
@@ -19,7 +20,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
+import com.rentflow.model.InventoryStatusHistory;
 import com.rentflow.repository.InventoryRepository;
+import com.rentflow.repository.InventoryStatusHistoryRepository;
 import com.rentflow.support.PostgresIntegrationTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,7 +38,16 @@ class MigrationIT extends PostgresIntegrationTest {
     private InventoryRepository repository;
 
     @Autowired
+    private InventoryStatusHistoryRepository historyRepository;
+
+    @Autowired
     private Flyway flyway;
+
+    @BeforeEach
+    void clearOwnedTables() {
+        historyRepository.deleteAllInBatch();
+        repository.deleteAllInBatch();
+    }
 
     @Test
     void runsAsRestrictedInventoryRoleInRentflowDatabase() {
@@ -56,6 +68,9 @@ class MigrationIT extends PostgresIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
                         "SELECT count(*) FROM inventory.flyway_schema_history WHERE version = '1'", Integer.class))
                 .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM inventory.flyway_schema_history WHERE version = '2'", Integer.class))
+                .isEqualTo(1);
         assertThat(jdbcTemplate.queryForList("""
                         SELECT indexname
                         FROM pg_indexes
@@ -63,11 +78,22 @@ class MigrationIT extends PostgresIntegrationTest {
                           AND tablename = 'inventory_items'
                         """, String.class))
                 .contains("inventory_items_pkey", "idx_inventory_items_status", "idx_inventory_items_type_lower");
+        assertThat(jdbcTemplate.queryForList("""
+                        SELECT indexname
+                        FROM pg_indexes
+                        WHERE schemaname = 'inventory'
+                          AND tablename = 'inventory_status_history'
+                        """, String.class))
+                .contains("inventory_status_history_pkey", "idx_inventory_status_history_transitioned_at_id");
         assertThat(jdbcTemplate.queryForObject("""
                         SELECT count(*)
                         FROM information_schema.tables
                         WHERE table_schema = 'public'
-                          AND table_name IN ('inventory_items', 'flyway_schema_history')
+                          AND table_name IN (
+                              'inventory_items',
+                              'inventory_status_history',
+                              'flyway_schema_history'
+                          )
                         """, Integer.class)).isZero();
 
         try (Connection connection = DriverManager.getConnection(
@@ -84,6 +110,80 @@ class MigrationIT extends PostgresIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
                         "SELECT count(*) FROM inventory.flyway_schema_history WHERE version = '1'", Integer.class))
                 .isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM inventory.flyway_schema_history WHERE version = '2'", Integer.class))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void createsTheHistoryTableWithDatabaseGeneratedValuesAndNoItemForeignKey() {
+        Map<String, Object> row = jdbcTemplate.queryForMap("""
+                INSERT INTO inventory.inventory_status_history (serial_number, status_from, status_to)
+                VALUES ('DRILL-HISTORY', 'AVAILABLE', 'RESERVED')
+                RETURNING id, transitioned_at
+                """);
+
+        assertThat(row.get("id")).isInstanceOf(Long.class);
+        assertThat(row.get("transitioned_at")).isNotNull();
+        assertThat(jdbcTemplate.queryForObject("""
+                        SELECT count(*)
+                        FROM information_schema.columns
+                        WHERE table_schema = 'inventory'
+                          AND table_name = 'inventory_status_history'
+                          AND column_name = 'id'
+                          AND data_type = 'bigint'
+                          AND is_identity = 'YES'
+                        """, Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                        SELECT indexdef
+                        FROM pg_indexes
+                        WHERE schemaname = 'inventory'
+                          AND tablename = 'inventory_status_history'
+                          AND indexname = 'idx_inventory_status_history_transitioned_at_id'
+                        """, String.class)).contains("transitioned_at DESC", "id DESC");
+        assertThat(jdbcTemplate.queryForObject("""
+                        SELECT count(*)
+                        FROM information_schema.columns
+                        WHERE table_schema = 'inventory'
+                          AND table_name = 'inventory_status_history'
+                          AND column_name = 'transitioned_at'
+                          AND data_type = 'timestamp with time zone'
+                          AND column_default IS NOT NULL
+                        """, Integer.class)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("""
+                        SELECT count(*)
+                        FROM information_schema.table_constraints
+                        WHERE table_schema = 'inventory'
+                          AND table_name = 'inventory_status_history'
+                          AND constraint_type = 'FOREIGN KEY'
+                        """, Integer.class)).isZero();
+    }
+
+    @Test
+    void historyConstraintsRejectInvalidRows() {
+        assertInvalidHistoryRow("/INVALID", "AVAILABLE", "RESERVED");
+        assertInvalidHistoryRow("S".repeat(65), "AVAILABLE", "RESERVED");
+        assertInvalidHistoryRow("DRILL-HISTORY", "UNKNOWN", "RESERVED");
+        assertInvalidHistoryRow("DRILL-HISTORY", "AVAILABLE", "UNKNOWN");
+        assertInvalidHistoryRow("DRILL-HISTORY", "AVAILABLE", "AVAILABLE");
+        assertInvalidHistoryRow(null, "AVAILABLE", "RESERVED");
+        assertInvalidHistoryRow("DRILL-HISTORY", null, "RESERVED");
+        assertInvalidHistoryRow("DRILL-HISTORY", "AVAILABLE", null);
+    }
+
+    @Test
+    void retainedHistorySurvivesItemDeletionAndASecondApplicationContext() {
+        repository.saveAndFlush(new InventoryItem("DRILL-AUDIT", "Drill", "Audit", InventoryStatus.AVAILABLE));
+        historyRepository.saveAndFlush(
+                new InventoryStatusHistory("DRILL-AUDIT", InventoryStatus.AVAILABLE, InventoryStatus.RESERVED));
+        repository.deleteAllInBatch();
+
+        assertThat(historyRepository.count()).isOne();
+        try (ConfigurableApplicationContext secondContext = startApplication(Map.of())) {
+            InventoryStatusHistoryRepository secondHistoryRepository =
+                    secondContext.getBean(InventoryStatusHistoryRepository.class);
+            assertThat(secondHistoryRepository.count()).isOne();
+        }
     }
 
     @Test
@@ -125,6 +225,14 @@ class MigrationIT extends PostgresIntegrationTest {
                         INSERT INTO inventory.inventory_items (serial_number, type, name, status)
                         VALUES (?, ?, ?, ?)
                         """, serialNumber, type, name, status))
+                .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    private void assertInvalidHistoryRow(String serialNumber, String statusFrom, String statusTo) {
+        assertThatThrownBy(() -> jdbcTemplate.update("""
+                        INSERT INTO inventory.inventory_status_history (serial_number, status_from, status_to)
+                        VALUES (?, ?, ?)
+                        """, serialNumber, statusFrom, statusTo))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 

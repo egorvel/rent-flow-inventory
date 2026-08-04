@@ -27,6 +27,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.repository.InventoryRepository;
+import com.rentflow.repository.InventoryStatusHistoryRepository;
 import com.rentflow.support.PostgresIntegrationTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,8 +58,12 @@ class InventoryIT extends PostgresIntegrationTest {
     @Autowired
     private InventoryRepository repository;
 
+    @Autowired
+    private InventoryStatusHistoryRepository historyRepository;
+
     @BeforeEach
     void clearInventory() {
+        historyRepository.deleteAllInBatch();
         repository.deleteAllInBatch();
     }
 
