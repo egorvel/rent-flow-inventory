@@ -17,6 +17,7 @@ import org.springframework.data.domain.Sort;
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.model.InventoryStatusHistory;
+import com.rentflow.model.InventoryStatusTransition;
 import com.rentflow.repository.InventoryRepository;
 import com.rentflow.repository.InventoryStatusHistoryRepository;
 
@@ -161,7 +162,7 @@ class InventoryServiceTest {
         when(repository.findForUpdateBySerialNumber("DRILL-001")).thenReturn(Optional.of(item));
         InventoryService service = new InventoryService(repository, historyRepository);
 
-        service.transitionStatus("DRILL-001", InventoryStatus.RENTED);
+        service.transitionStatus(List.of(new InventoryStatusTransition("DRILL-001", InventoryStatus.RENTED)));
 
         assertThat(item.getStatus()).isEqualTo(InventoryStatus.RENTED);
         ArgumentCaptor<InventoryStatusHistory> historyCaptor = ArgumentCaptor.forClass(InventoryStatusHistory.class);
@@ -178,20 +179,76 @@ class InventoryServiceTest {
         when(repository.findForUpdateBySerialNumber("MISSING")).thenReturn(Optional.empty());
         InventoryService service = new InventoryService(repository, historyRepository);
 
-        assertThatThrownBy(() -> service.transitionStatus("MISSING", InventoryStatus.AVAILABLE))
-                .isInstanceOf(InventoryItemNotFoundException.class);
+        assertThatThrownBy(() -> service.transitionStatus(
+                        List.of(new InventoryStatusTransition("MISSING", InventoryStatus.AVAILABLE))))
+                .isInstanceOf(InventoryStatusTransitionBatchException.class);
 
         InventoryItem rented = new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RENTED);
         when(repository.findForUpdateBySerialNumber("DRILL-001")).thenReturn(Optional.of(rented));
-        assertThatThrownBy(() -> service.transitionStatus("DRILL-001", InventoryStatus.AVAILABLE))
-                .isInstanceOf(InvalidInventoryStatusTransitionException.class);
-        assertThatThrownBy(() -> service.transitionStatus("DRILL-001", InventoryStatus.RENTED))
-                .isInstanceOf(InvalidInventoryStatusTransitionException.class);
-        assertThatThrownBy(() -> service.transitionStatus("DRILL-001", null))
-                .isInstanceOf(InvalidInventoryStatusTransitionException.class);
+        assertThatThrownBy(() -> service.transitionStatus(
+                        List.of(new InventoryStatusTransition("DRILL-001", InventoryStatus.AVAILABLE))))
+                .isInstanceOf(InventoryStatusTransitionBatchException.class);
+        assertThatThrownBy(() -> service.transitionStatus(
+                        List.of(new InventoryStatusTransition("DRILL-001", InventoryStatus.RENTED))))
+                .isInstanceOf(InventoryStatusTransitionBatchException.class);
+        assertThatThrownBy(() -> service.transitionStatus(List.of(new InventoryStatusTransition("DRILL-001", null))))
+                .isInstanceOf(InventoryStatusTransitionBatchException.class);
 
         assertThat(rented.getStatus()).isEqualTo(InventoryStatus.RENTED);
         verifyNoInteractions(historyRepository);
+    }
+
+    @Test
+    void locksInSerialOrderAndReportsAllFailuresWithoutChangingValidItems() {
+        InventoryItem valid = new InventoryItem("A", "Drill", "Original", InventoryStatus.AVAILABLE);
+        InventoryItem invalid = new InventoryItem("Z", "Drill", "Original", InventoryStatus.RETIRED);
+        when(repository.findForUpdateBySerialNumber("A")).thenReturn(Optional.of(valid));
+        when(repository.findForUpdateBySerialNumber("Z")).thenReturn(Optional.of(invalid));
+        when(repository.findForUpdateBySerialNumber("MISSING")).thenReturn(Optional.empty());
+        InventoryService service = new InventoryService(repository, historyRepository);
+
+        assertThatThrownBy(() -> service.transitionStatus(List.of(
+                        new InventoryStatusTransition("Z", InventoryStatus.AVAILABLE),
+                        new InventoryStatusTransition("A", InventoryStatus.RENTED),
+                        new InventoryStatusTransition("MISSING", InventoryStatus.RESERVED))))
+                .isInstanceOfSatisfying(InventoryStatusTransitionBatchException.class, exception -> {
+                    assertThat(exception.getFailures())
+                            .extracting(InventoryStatusTransitionBatchException.Failure::index)
+                            .containsExactly(0, 2);
+                    assertThat(exception.getFailures())
+                            .extracting(InventoryStatusTransitionBatchException.Failure::code)
+                            .containsExactly("INVALID_INVENTORY_STATUS_TRANSITION", "INVENTORY_ITEM_NOT_FOUND");
+                });
+        InOrder order = org.mockito.Mockito.inOrder(repository);
+        order.verify(repository).findForUpdateBySerialNumber("A");
+        order.verify(repository).findForUpdateBySerialNumber("MISSING");
+        order.verify(repository).findForUpdateBySerialNumber("Z");
+        assertThat(valid.getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+        assertThat(invalid.getStatus()).isEqualTo(InventoryStatus.RETIRED);
+        verifyNoInteractions(historyRepository);
+    }
+
+    @Test
+    void validatesTheWholeBatchBeforeWritingHistory() {
+        InventoryItem first = new InventoryItem("A", "Drill", "Original", InventoryStatus.AVAILABLE);
+        InventoryItem second = new InventoryItem("Z", "Mixer", "Original", InventoryStatus.RESERVED);
+        when(repository.findForUpdateBySerialNumber("A")).thenReturn(Optional.of(first));
+        when(repository.findForUpdateBySerialNumber("Z")).thenAnswer(invocation -> {
+            assertThat(first.getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+            verifyNoInteractions(historyRepository);
+            return Optional.of(second);
+        });
+        new InventoryService(repository, historyRepository)
+                .transitionStatus(List.of(
+                        new InventoryStatusTransition("Z", InventoryStatus.RENTED),
+                        new InventoryStatusTransition("A", InventoryStatus.RESERVED)));
+        ArgumentCaptor<InventoryStatusHistory> captor = ArgumentCaptor.forClass(InventoryStatusHistory.class);
+        verify(historyRepository, times(2)).save(captor.capture());
+        assertThat(captor.getAllValues())
+                .extracting(InventoryStatusHistory::getStatusFrom)
+                .containsExactly(InventoryStatus.RESERVED, InventoryStatus.AVAILABLE);
+        assertThat(first.getStatus()).isEqualTo(InventoryStatus.RESERVED);
+        assertThat(second.getStatus()).isEqualTo(InventoryStatus.RENTED);
     }
 
     @Test

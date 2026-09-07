@@ -27,12 +27,14 @@ import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import com.rentflow.dto.InventoryStatusTransitionFailureDTO;
+import com.rentflow.dto.InventoryStatusTransitionProblemResponse;
 import com.rentflow.dto.ProblemResponse;
 import com.rentflow.dto.ViolationResponse;
 import com.rentflow.model.InventoryStatus;
-import com.rentflow.service.InvalidInventoryStatusTransitionException;
 import com.rentflow.service.InventoryItemAlreadyExistsException;
 import com.rentflow.service.InventoryItemNotFoundException;
+import com.rentflow.service.InventoryStatusTransitionBatchException;
 
 import tools.jackson.databind.exc.InvalidFormatException;
 
@@ -66,17 +68,28 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 List.of());
     }
 
-    @ExceptionHandler(InvalidInventoryStatusTransitionException.class)
-    ResponseEntity<ProblemResponse> handleInvalidTransition(
-            InvalidInventoryStatusTransitionException exception, WebRequest request) {
-        return response(
-                HttpStatus.CONFLICT,
-                "urn:rentflow:problem:invalid-inventory-status-transition",
-                "Invalid inventory status transition",
-                exception.getMessage(),
-                "INVALID_INVENTORY_STATUS_TRANSITION",
-                request,
-                List.of());
+    @ExceptionHandler(InventoryStatusTransitionBatchException.class)
+    ResponseEntity<InventoryStatusTransitionProblemResponse> handleInvalidTransition(
+            InventoryStatusTransitionBatchException exception, WebRequest request) {
+        boolean conflict = exception.getFailures().stream()
+                .anyMatch(failure -> failure.code().equals("INVALID_INVENTORY_STATUS_TRANSITION"));
+        HttpStatus status = conflict ? HttpStatus.CONFLICT : HttpStatus.NOT_FOUND;
+        List<InventoryStatusTransitionFailureDTO> failures = exception.getFailures().stream()
+                .map(failure -> new InventoryStatusTransitionFailureDTO(
+                        failure.index(), failure.serialNumber(), failure.status(), failure.code(), failure.message()))
+                .toList();
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(new InventoryStatusTransitionProblemResponse(
+                        conflict
+                                ? "urn:rentflow:problem:invalid-inventory-status-transition"
+                                : "urn:rentflow:problem:inventory-item-not-found",
+                        conflict ? "Invalid inventory status transition" : "Inventory item not found",
+                        status.value(),
+                        exception.getMessage(),
+                        requestPath(request),
+                        conflict ? "INVALID_INVENTORY_STATUS_TRANSITION" : "INVENTORY_ITEM_NOT_FOUND",
+                        failures));
     }
 
     @ExceptionHandler(ConstraintViolationException.class)
@@ -338,6 +351,10 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     private String finalPathSegment(String path) {
+        int index = path.indexOf('[');
+        if (index >= 0) {
+            return path.substring(index).replace(".<list element>", "");
+        }
         int separator = path.lastIndexOf('.');
         return separator < 0 ? path : path.substring(separator + 1);
     }

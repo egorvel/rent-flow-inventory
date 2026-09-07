@@ -195,33 +195,64 @@ curl --fail-with-body \
   'http://localhost:8080/api/v1/inventory?page=0&size=20&status=AVAILABLE&type=Industrial%20drill&sort=name&direction=asc'
 ```
 
-Transition the item from `AVAILABLE` to `RESERVED`. A successful transition returns `204 No
-Content`, changes only the status, and creates one history record:
+Transition inventory statuses atomically with `PATCH /api/v1/inventory/status`. The body is an
+array of 1–100 objects with unique, case-sensitive serial numbers. Each entry supplies its own
+target status. Success returns `204 No Content`, changes only statuses, and creates one history
+record per item. All item changes and history records commit together.
+
+This one-item batch transitions the item created above from `AVAILABLE` to `RESERVED`:
 
 ```bash
 curl --fail-with-body \
   --request PATCH \
   --output /dev/null \
   --write-out '%{http_code}\n' \
-  'http://localhost:8080/api/v1/inventory/DRILL-001/status' \
+  'http://localhost:8080/api/v1/inventory/status' \
   --header 'Content-Type: application/json' \
-  --data '{
-    "status": "RESERVED"
-  }'
+  --data '[{"serialNumber":"DRILL-001","status":"RESERVED"}]'
 ```
 
-Attempt a disallowed transition from `RESERVED` to `RETIRED`. It returns `409 Conflict` with the
-problem code `INVALID_INVENTORY_STATUS_TRANSITION` and changes neither the item nor its history:
+A disallowed transition from `RESERVED` to `RETIRED` rejects the entire batch. This example also
+includes a missing item, so both failures are reported:
 
 ```bash
 curl --include \
   --request PATCH \
-  'http://localhost:8080/api/v1/inventory/DRILL-001/status' \
+  'http://localhost:8080/api/v1/inventory/status' \
   --header 'Content-Type: application/json' \
-  --data '{
-    "status": "RETIRED"
-  }'
+  --data '[
+    {"serialNumber":"DRILL-001","status":"RETIRED"},
+    {"serialNumber":"MISSING","status":"RENTED"}
+  ]'
 ```
+
+The response is `409 Conflict` with `Content-Type: application/problem+json`:
+
+```json
+{
+  "type": "urn:rentflow:problem:invalid-inventory-status-transition",
+  "title": "Invalid inventory status transition",
+  "status": 409,
+  "detail": "No inventory statuses were changed.",
+  "instance": "/api/v1/inventory/status",
+  "code": "INVALID_INVENTORY_STATUS_TRANSITION",
+  "failedItems": [
+    {"index": 0, "serialNumber": "DRILL-001", "status": "RETIRED",
+     "code": "INVALID_INVENTORY_STATUS_TRANSITION",
+     "message": "Inventory item 'DRILL-001' cannot transition from RESERVED to RETIRED."},
+    {"index": 1, "serialNumber": "MISSING", "status": "RENTED",
+     "code": "INVENTORY_ITEM_NOT_FOUND", "message": "Inventory item 'MISSING' was not found."}
+  ]
+}
+```
+
+`failedItems` lists all and only failed entries in original request order; `index` is zero-based
+and `status` is the requested target. Any forbidden transition produces `409`, including mixed
+failures. When every failed entry is missing, the response is `404 INVENTORY_ITEM_NOT_FOUND`.
+Otherwise valid entries also remain unchanged when a batch fails. Same-status requests remain
+forbidden. Invalid input, including empty/oversized arrays, null entries, and duplicate serials,
+returns `400` before lifecycle evaluation, with input errors only. The former
+`PATCH /api/v1/inventory/{serialNumber}/status` endpoint is removed; no API version is added.
 
 Browse status history using the defaults `page=0`, `size=20`, `sort=timestamp`, and
 `direction=desc`:

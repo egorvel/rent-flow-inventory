@@ -65,7 +65,7 @@ class OpenApiIT extends PostgresIntegrationTest {
                         "/api/v1/inventory",
                         "/api/v1/inventory-history",
                         "/api/v1/inventory/{serialNumber}",
-                        "/api/v1/inventory/{serialNumber}/status");
+                        "/api/v1/inventory/status");
         assertThat(operation("/api/v1/inventory", "post").path("operationId").asString())
                 .isEqualTo("createInventoryItem");
         assertThat(operation("/api/v1/inventory", "get").path("operationId").asString())
@@ -82,7 +82,7 @@ class OpenApiIT extends PostgresIntegrationTest {
                         .path("operationId")
                         .asString())
                 .isEqualTo("deleteInventoryItem");
-        assertThat(operation("/api/v1/inventory/{serialNumber}/status", "patch")
+        assertThat(operation("/api/v1/inventory/status", "patch")
                         .path("operationId")
                         .asString())
                 .isEqualTo("transitionInventoryStatus");
@@ -92,7 +92,7 @@ class OpenApiIT extends PostgresIntegrationTest {
                 .isEqualTo("listInventoryStatusHistory");
         assertThat(paths.path("/api/v1/inventory").has("patch")).isFalse();
         assertThat(paths.path("/api/v1/inventory/{serialNumber}").has("patch")).isFalse();
-        assertThat(names(paths.path("/api/v1/inventory/{serialNumber}/status"))).containsExactly("patch");
+        assertThat(names(paths.path("/api/v1/inventory/status"))).containsExactly("patch");
         assertThat(names(paths))
                 .noneMatch(path -> path.startsWith("/actuator") || path.equals("/livez") || path.equals("/readyz"));
 
@@ -128,8 +128,9 @@ class OpenApiIT extends PostgresIntegrationTest {
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_STATUSES);
         assertThat(enumValues(schema("InventoryItemDTO").path("properties").path("status")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_STATUSES);
-        assertSchemaProperties("InventoryStatusUpdateDTO", Set.of("status"));
-        assertThat(texts(schema("InventoryStatusUpdateDTO").path("required"))).containsExactly("status");
+        assertSchemaProperties("InventoryStatusUpdateDTO", Set.of("serialNumber", "status"));
+        assertThat(texts(schema("InventoryStatusUpdateDTO").path("required")))
+                .containsExactlyInAnyOrder("serialNumber", "status");
         assertThat(enumValues(
                         schema("InventoryStatusUpdateDTO").path("properties").path("status")))
                 .containsExactlyInAnyOrderElementsOf(INVENTORY_STATUSES);
@@ -228,16 +229,32 @@ class OpenApiIT extends PostgresIntegrationTest {
             assertThat(resolved(serialParameter.path("schema")).path("pattern").asString())
                     .isEqualTo(InventoryItemDTO.SERIAL_NUMBER_PATTERN);
         }
-        JsonNode transitionSerial =
-                parameter(operation("/api/v1/inventory/{serialNumber}/status", "patch"), "serialNumber");
-        assertThat(transitionSerial.path("required").asBoolean()).isTrue();
-        assertThat(resolved(transitionSerial.path("schema")).path("pattern").asString())
+        assertThat(schema("InventoryStatusUpdateDTO")
+                        .at("/properties/serialNumber/pattern")
+                        .asString())
                 .isEqualTo(InventoryItemDTO.SERIAL_NUMBER_PATTERN);
+        JsonNode batch = operation("/api/v1/inventory/status", "patch");
+        assertThat(batch.path("parameters").isMissingNode()
+                        || batch.path("parameters").isEmpty())
+                .isTrue();
+        assertThat(batch.at("/requestBody/required").asBoolean()).isTrue();
+        JsonNode batchSchema = batch.at("/requestBody/content/application~1json/schema");
+        assertThat(batchSchema.path("type").asString()).isEqualTo("array");
+        assertThat(batchSchema.path("minItems").asInt()).isEqualTo(1);
+        assertThat(batchSchema.path("maxItems").asInt()).isEqualTo(100);
+        assertThat(batchSchema.at("/items/$ref").asString()).isEqualTo("#/components/schemas/InventoryStatusUpdateDTO");
+        assertSchemaProperties(
+                "InventoryStatusTransitionProblemResponse",
+                Set.of("type", "title", "status", "detail", "instance", "code", "failedItems"));
+        assertThat(texts(schema("InventoryStatusTransitionProblemResponse").path("required")))
+                .containsExactlyInAnyOrder("type", "title", "status", "detail", "instance", "code", "failedItems");
+        assertSchemaProperties(
+                "InventoryStatusTransitionFailureDTO", Set.of("index", "serialNumber", "status", "code", "message"));
+        assertThat(texts(schema("InventoryStatusTransitionFailureDTO").path("required")))
+                .containsExactlyInAnyOrder("index", "serialNumber", "status", "code", "message");
 
         assertRequestBodySchema(operation("/api/v1/inventory", "post"), "InventoryItemDTO");
         assertRequestBodySchema(operation("/api/v1/inventory/{serialNumber}", "put"), "InventoryItemDTO");
-        assertRequestBodySchema(
-                operation("/api/v1/inventory/{serialNumber}/status", "patch"), "InventoryStatusUpdateDTO");
     }
 
     @Test
@@ -265,7 +282,7 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertResponseCodes(delete, "204", "400", "404", "500");
         assertThat(delete.at("/responses/204").has("content")).isFalse();
 
-        JsonNode transition = operation("/api/v1/inventory/{serialNumber}/status", "patch");
+        JsonNode transition = operation("/api/v1/inventory/status", "patch");
         assertResponseCodes(transition, "204", "400", "404", "406", "409", "415", "500");
         assertThat(transition.at("/responses/204").has("content")).isFalse();
 
@@ -279,7 +296,14 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertProblemSchemas(get, Set.of("400", "404", "406", "500"));
         assertProblemSchemas(replace, Set.of("400", "404", "406", "415", "500"));
         assertProblemSchemas(delete, Set.of("400", "404", "500"));
-        assertProblemSchemas(transition, Set.of("400", "404", "406", "409", "415", "500"));
+        assertProblemSchemas(transition, Set.of("400", "406", "415", "500"));
+        for (String code : List.of("404", "409")) {
+            assertResponseSchema(
+                    transition,
+                    code,
+                    MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                    "InventoryStatusTransitionProblemResponse");
+        }
         assertProblemSchemas(history, Set.of("400", "406", "500"));
     }
 
@@ -317,7 +341,7 @@ class OpenApiIT extends PostgresIntegrationTest {
                 operation("/api/v1/inventory/{serialNumber}", "get"),
                 operation("/api/v1/inventory/{serialNumber}", "put"),
                 operation("/api/v1/inventory/{serialNumber}", "delete"),
-                operation("/api/v1/inventory/{serialNumber}/status", "patch"),
+                operation("/api/v1/inventory/status", "patch"),
                 operation("/api/v1/inventory-history", "get"));
     }
 

@@ -1,6 +1,7 @@
 package com.rentflow.controller;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -13,9 +14,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.ServletWebRequest;
 
+import com.rentflow.dto.InventoryStatusTransitionFailureDTO;
+import com.rentflow.dto.InventoryStatusTransitionProblemResponse;
 import com.rentflow.dto.ProblemResponse;
 import com.rentflow.model.InventoryStatus;
-import com.rentflow.service.InvalidInventoryStatusTransitionException;
+import com.rentflow.service.InventoryStatusTransitionBatchException;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -83,25 +86,46 @@ class ApiExceptionHandlerTest {
     }
 
     @Test
-    void returnsTheStableInvalidTransitionProblem() {
-        MockHttpServletRequest request = new MockHttpServletRequest("PATCH", "/api/v1/inventory/DRILL-001/status");
-        InvalidInventoryStatusTransitionException exception = new InvalidInventoryStatusTransitionException(
-                "DRILL-001", InventoryStatus.RENTED, InventoryStatus.AVAILABLE);
-
-        ResponseEntity<ProblemResponse> response =
-                handler.handleInvalidTransition(exception, new ServletWebRequest(request));
-
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
-        assertThat(response.getBody())
-                .isEqualTo(new ProblemResponse(
-                        "urn:rentflow:problem:invalid-inventory-status-transition",
-                        "Invalid inventory status transition",
-                        409,
-                        "Inventory item 'DRILL-001' cannot transition from RENTED to AVAILABLE.",
-                        "/api/v1/inventory/DRILL-001/status",
-                        "INVALID_INVENTORY_STATUS_TRANSITION",
-                        java.util.List.of()));
+    void returnsTheStableBatchProblemAndPreservesIndividualFailures() {
+        MockHttpServletRequest request = new MockHttpServletRequest("PATCH", "/api/v1/inventory/status");
+        InventoryStatusTransitionBatchException.Failure missing = new InventoryStatusTransitionBatchException.Failure(
+                0,
+                "MISSING",
+                InventoryStatus.RESERVED,
+                "INVENTORY_ITEM_NOT_FOUND",
+                "Inventory item 'MISSING' was not found.");
+        InventoryStatusTransitionBatchException.Failure conflict = new InventoryStatusTransitionBatchException.Failure(
+                2,
+                "DRILL-001",
+                InventoryStatus.AVAILABLE,
+                "INVALID_INVENTORY_STATUS_TRANSITION",
+                "Inventory item 'DRILL-001' cannot transition from RENTED to AVAILABLE.");
+        for (List<InventoryStatusTransitionBatchException.Failure> failures :
+                List.of(List.of(missing), List.of(missing, conflict))) {
+            boolean hasConflict = failures.size() == 2;
+            ResponseEntity<InventoryStatusTransitionProblemResponse> response = handler.handleInvalidTransition(
+                    new InventoryStatusTransitionBatchException(failures), new ServletWebRequest(request));
+            assertThat(response.getStatusCode()).isEqualTo(hasConflict ? HttpStatus.CONFLICT : HttpStatus.NOT_FOUND);
+            assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
+            assertThat(response.getBody())
+                    .isEqualTo(new InventoryStatusTransitionProblemResponse(
+                            hasConflict
+                                    ? "urn:rentflow:problem:invalid-inventory-status-transition"
+                                    : "urn:rentflow:problem:inventory-item-not-found",
+                            hasConflict ? "Invalid inventory status transition" : "Inventory item not found",
+                            hasConflict ? 409 : 404,
+                            "No inventory statuses were changed.",
+                            "/api/v1/inventory/status",
+                            hasConflict ? "INVALID_INVENTORY_STATUS_TRANSITION" : "INVENTORY_ITEM_NOT_FOUND",
+                            failures.stream()
+                                    .map(failure -> new InventoryStatusTransitionFailureDTO(
+                                            failure.index(),
+                                            failure.serialNumber(),
+                                            failure.status(),
+                                            failure.code(),
+                                            failure.message()))
+                                    .toList()));
+        }
     }
 
     @Test

@@ -1,6 +1,6 @@
 # Inventory Status Transition Requirements
 
-Status: Requirements, design, and implementation tasks defined; ready for implementation.
+Status: Batch transition implemented and verified locally; changes ready for review.
 
 ## Context
 
@@ -9,9 +9,11 @@ full-replacement endpoint without lifecycle restrictions. Rental operations also
 way to advance only the lifecycle status while preventing transitions that contradict the
 equipment workflow.
 
-This feature adds `PATCH /api/v1/inventory/{serialNumber}/status`. A request supplies one defined
-target `status`, and a successful request changes only the identified item's status. Success
-returns `204 No Content` with an empty response body.
+This feature replaces the single-item operation with `PATCH /api/v1/inventory/status`, without
+adding an API version or retaining the previous endpoint. A request supplies an array of 1–100
+objects, each containing a unique `serialNumber` and a defined target `status`. Success changes
+only those items' statuses and returns `204 No Content` with an empty response body. The entire
+batch, including all history records, commits atomically; any failed item prevents every change.
 
 The dedicated endpoint enforces the following exhaustive transition matrix:
 
@@ -57,30 +59,43 @@ service-skeleton requirements continue to apply.
 
 ## User stories
 
-### US1 - Transition an inventory item's status
+### US1 - Transition inventory statuses atomically
 
-As a rental workflow operator, I want to change an item's lifecycle status through a dedicated
-endpoint so that only valid equipment-state progressions are applied.
+As a rental workflow operator, I want to transition multiple items together through a dedicated
+endpoint so that the whole operation succeeds only when every equipment-state progression is valid.
 
-- **AC1.1 (Event-driven):** When a client requests a permitted transition for an existing item
-  through `PATCH /api/v1/inventory/{serialNumber}/status`, the inventory service shall persist the
-  target status and return `204 No Content` with an empty response body.
+- **AC1.1 (Event-driven):** When a client requests a batch of permitted transitions for existing items
+  through `PATCH /api/v1/inventory/status`, the inventory service shall persist all requested
+  target statuses and return `204 No Content` with an empty response body.
 - **AC1.2 (Ubiquitous):** The inventory service shall apply the transition matrix in the Context
   section exhaustively, with no permitted transition other than those listed for the item's
   current status.
 - **AC1.3 (Event-driven):** When a status transition succeeds, the inventory service shall leave
   the item's `serialNumber`, `type`, and `name` unchanged.
-- **AC1.4 (Unwanted):** If the requested target equals the item's current status, then the
-  inventory service shall return `409 Conflict` and shall leave the item unchanged.
-- **AC1.5 (Unwanted):** If the requested target is not permitted from the item's current status,
-  then the inventory service shall return `409 Conflict` and shall leave the item unchanged.
-- **AC1.6 (Unwanted):** If the identified serial number does not exist, then the inventory service
-  shall return `404 Not Found` and shall not create an inventory item.
-- **AC1.7 (Unwanted):** If a status-transition request is malformed, omits its required status,
-  supplies a null status, or contains an undefined status, then the inventory service shall return
-  `400 Bad Request` and shall leave the item unchanged.
+- **AC1.4 (Unwanted):** If a syntactically valid batch requests a target equal to the item's current status, then the
+  inventory service shall return `409 Conflict` and shall leave every batch item unchanged.
+- **AC1.5 (Unwanted):** If a syntactically valid batch requests a target not permitted from the item's current status,
+  then the inventory service shall return `409 Conflict` and shall leave every batch item unchanged.
+- **AC1.6 (Unwanted):** If a syntactically valid batch has failures and every failed item is missing, then the inventory service
+  shall return `404 Not Found` and shall leave every batch item unchanged without creating items.
+- **AC1.7 (Unwanted):** If a status-transition request is malformed, has an invalid or missing serial number,
+  omits its required status, supplies a null status, or contains an undefined status, then the
+  inventory service shall return `400 Bad Request` and shall leave every batch item unchanged.
 - **AC1.8 (Unwanted):** If a status-transition request uses an unsupported media type, then the
-  inventory service shall return `415 Unsupported Media Type` and shall leave the item unchanged.
+  inventory service shall return `415 Unsupported Media Type` and shall leave every batch item unchanged.
+
+- **AC1.9 (Unwanted):** If the body is not an array of 1–100 non-null objects or contains repeated
+  case-sensitive serial numbers, then the inventory service shall return `400 Bad Request` and
+  shall leave every batch item and all history unchanged.
+- **AC1.10 (Unwanted):** If a syntactically valid batch has any missing item or forbidden
+  transition, then the inventory service shall report all and only failed items in request order
+  in `failedItems`, each with zero-based `index`, `serialNumber`, requested `status`, `code`, and
+  `message`, and shall commit no status changes or history records for the batch.
+- **AC1.11 (Unwanted):** If a syntactically valid batch contains both missing items and forbidden transitions, then
+  the inventory service shall return `409 Conflict` with both kinds of failure in `failedItems`.
+- **AC1.12 (Unwanted):** If request input validation fails, then the inventory service shall
+  return only input errors with `400 Bad Request` and shall not evaluate lifecycle rules or
+  perform inventory writes.
 
 ### US2 - Retain an audit trail of dedicated status transitions
 
@@ -92,8 +107,8 @@ retains an immutable account of how each item's status changed over time.
   immediately before the transition, its status immediately after the transition, and the
   transition timestamp.
 - **AC2.2 (Ubiquitous):** The inventory service shall commit the inventory-item status change and
-  its corresponding history record atomically so that either both changes persist or neither
-  change persists.
+  all corresponding history records for the complete batch atomically so that either all changes
+  persist or none persist.
 - **AC2.3 (Unwanted):** If a dedicated status-transition request is rejected or fails, then the
   inventory service shall not persist a history record for that request.
 - **AC2.4 (Event-driven):** When an inventory item is deleted after one or more successful
@@ -152,10 +167,12 @@ that adding the dedicated lifecycle operation does not break existing integratio
 As an API consumer, I want the new operations and their failures documented consistently so that
 my integration can invoke them and diagnose rejected requests.
 
-- **AC5.1 (Unwanted):** If a dedicated status transition is rejected because the target is not
+- **AC5.1 (Unwanted):** If a syntactically valid dedicated status transition is rejected because the target is not
   permitted from the current status, including a transition to the same status, then the inventory
   service shall return an RFC 9457 Problem Details response with `409 Conflict` and a stable
-  machine-readable problem code for an invalid status transition.
+  machine-readable problem code for an invalid status transition and a `failedItems` array. Each
+  entry shall contain its zero-based request `index`, `serialNumber`, requested `status`, individual
+  `code`, and `message`.
 - **AC5.2 (Unwanted):** If another client or server error occurs for the dedicated transition or
   history collection endpoint, then the inventory service shall return an RFC 9457 Problem Details
   response consistent with the existing inventory API error contract.
@@ -191,8 +208,8 @@ my integration can invoke them and diagnose rejected requests.
 
 ## Resolved questions
 
-1. **Dedicated endpoint:** Status transitions use
-   `PATCH /api/v1/inventory/{serialNumber}/status`. A successful transition returns
+1. **Dedicated endpoint:** Status transitions use an array at
+   `PATCH /api/v1/inventory/status`; the former single-item path is removed without a new version. A successful transition returns
    `204 No Content`. This is reflected in AC1.1; the API rationale and precise request contract
    are defined in `design.md` §2.1.
 2. **No-op requests:** A request whose target equals the current status is rejected rather than
@@ -225,10 +242,10 @@ my integration can invoke them and diagnose rejected requests.
     and §3.4.
 13. **Deleted-item visibility:** Preserved history remains visible after its inventory item is
     deleted. This is reflected in AC2.4 and AC3.9. See `design.md` §4.4.
-14. **Implementation sequence:** Delivery uses four linear, independently verified commits for
+14. **Original implementation sequence:** The delivered baseline used four linear, independently verified commits for
     persistence, transition, history browsing, and final documentation/acceptance. See `tasks.md`
-    §2 and §3.
-15. **Vertical endpoint increments:** The transition and history collection operations each ship
+    §2 and §3. The batch amendment is the single increment T5.
+15. **Original vertical endpoint increments:** The transition and history collection operations each ship
     with their service, controller, persistence collaboration, and tests in one safe commit. See
     `tasks.md` T2 and T3.
 16. **Contract-test placement:** `OpenApiIT` changes in the same task as each endpoint so no
@@ -236,6 +253,16 @@ my integration can invoke them and diagnose rejected requests.
     §1, T2, and T3.
 17. **Concurrency verification:** The pessimistic-lock concurrency test belongs to the transition
     increment that introduces the locking behavior. See `tasks.md` T2.
-18. **Final acceptance:** Documentation and traceability use a final commit, and acceptance runs
+18. **Final acceptance:** Original documentation used T4; the batch amendment includes documentation
+    and acceptance together in T5. Acceptance runs
     `mvn -B -ntp clean verify` without rerunning the unchanged container smoke suite. See
-    `tasks.md` §1 and T4.
+    `tasks.md` §1 and T5.
+
+19. **Batch shape and bounds:** The body is a direct array of 1–100 objects with `serialNumber`
+    and `status`; duplicate serials are invalid input. See `design.md` §2.1 and §5.2.
+20. **Mixed failures:** Any forbidden transition makes the batch response `409`; when all failures
+    are missing items, it is `404`. Both report every failed item. See `design.md` §5.1.
+21. **Failure entries:** `failedItems` contains zero-based `index`, `serialNumber`, requested
+    `status`, `code`, and `message`, ordered by request index. See `design.md` §5.1.
+22. **Validation precedence:** Input errors return `400` before lifecycle evaluation. Parse errors
+    need not be aggregated; validly parsed field errors use indexed violations. See `design.md` §5.2.

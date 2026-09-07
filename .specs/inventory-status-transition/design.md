@@ -1,6 +1,6 @@
 # Inventory Status Transition Design
 
-Status: Requirements, design, and implementation tasks defined; ready for implementation.
+Status: Batch transition implemented and verified locally; changes ready for review.
 
 ## 1. Scope and architecture
 
@@ -12,7 +12,7 @@ layout. It adds two unauthenticated operations:
 
 | Capability | Method and path |
 | --- | --- |
-| Transition one item's status | `PATCH /api/v1/inventory/{serialNumber}/status` |
+| Transition a batch of item statuses | `PATCH /api/v1/inventory/status` |
 | Browse retained transition history | `GET /api/v1/inventory-history` |
 
 Only the dedicated `PATCH` operation enforces lifecycle transitions and creates history. Item
@@ -30,7 +30,7 @@ serial number happens to be `history` or another collection-like term.
 | Unknown `PATCH` members | Reject with `400`; the existing Jackson `fail-on-unknown-properties` setting already provides strict request binding. |
 | Timestamp authority | PostgreSQL supplies `CURRENT_TIMESTAMP` into a `timestamptz` column, keeping one database-authoritative clock. |
 | Internal identity | A generated `bigint` identity is the primary key and deterministic paging tie-breaker; it is never exposed by the API. |
-| Concurrent transitions | A pessimistic write lock serializes transition validation and mutation for one inventory row. |
+| Concurrent transitions | Pessimistic write locks acquired in ascending serial-number order serialize overlapping batches and avoid opposite lock ordering. |
 | Component boundary | `InventoryHistoryController` owns the history HTTP collection while the existing `InventoryService` owns both transition and history-list use cases. |
 | Rule ownership | `InventoryStatus` owns the exhaustive `canTransitionTo` matrix. |
 | Partial matching | PostgreSQL `LIKE` implements case-sensitive literal substring matching; no `pg_trgm` extension is introduced. |
@@ -43,8 +43,8 @@ The new runtime paths follow the existing layer direction:
 PATCH request
   -> InventoryController
   -> InventoryService
-  -> InventoryRepository (locked item)
-  -> InventoryStatusHistoryRepository (one insert)
+  -> InventoryRepository (all items locked in serial-number order)
+  -> InventoryStatusHistoryRepository (one insert per item)
 
 GET history request
   -> InventoryHistoryController
@@ -61,39 +61,42 @@ transaction rules, so it is not added.
 
 ## 2. HTTP API
 
-### 2.1 Transition an inventory status
+### 2.1 Transition inventory statuses atomically
 
-`PATCH /api/v1/inventory/{serialNumber}/status` consumes `application/json`. The path value uses
-the existing case-sensitive `InventoryItemDTO.SERIAL_NUMBER_PATTERN` and its 64-character limit.
-The request body is an `InventoryStatusUpdateDTO` with exactly one required property:
+`PATCH /api/v1/inventory/status` consumes `application/json` and replaces the former
+`PATCH /api/v1/inventory/{serialNumber}/status` route without a new API version. The body is a
+direct array with 1–100 non-null `InventoryStatusUpdateDTO` objects:
 
 ```json
-{
-  "status": "RENTED"
-}
+[
+  {"serialNumber": "DRILL-001", "status": "RENTED"},
+  {"serialNumber": "MIXER-001", "status": "RESERVED"}
+]
 ```
 
-`status` is annotated with `@NotNull` and an OpenAPI enum containing all six status values. The
-existing `spring.jackson.deserialization.fail-on-unknown-properties: true` setting rejects every
-other JSON member. Malformed JSON and unknown members follow the existing unreadable-message
-problem path; a missing or null `status` follows Bean Validation; an unknown enum token follows the
-existing invalid-`InventoryStatus` mapping.
+Each object has exactly two required properties. `serialNumber` uses the existing case-sensitive
+`InventoryItemDTO.SERIAL_NUMBER_PATTERN` (1–64 characters), without trimming or case folding;
+`status` is a non-null enum with all six existing values. Unknown members remain rejected by the
+existing strict Jackson configuration. Duplicate serials are rejected, even when targets match.
+Input validation completes before invoking the service; errors use §5.2.
 
-The controller passes `serialNumber` and `request.status()` to
-`InventoryService.setStatus`. A successful call returns
-`ResponseEntity.noContent().build()` and has no response content or `Content-Type`.
+The controller maps each DTO to an `InventoryStatusTransition` model record and passes the list to
+`InventoryService.transitionStatus`. This keeps service dependencies within the existing layers.
+A successful batch returns `ResponseEntity.noContent().build()` with no content or `Content-Type`.
 
 | Result | Status | Body |
 | --- | --- | --- |
-| Permitted transition committed | `204 No Content` | Empty |
-| Invalid path or body | `400 Bad Request` | Problem Details |
-| Item absent | `404 Not Found` | Problem Details |
-| Same-status or disallowed transition | `409 Conflict` | Problem Details |
-| Response representation unacceptable | `406 Not Acceptable` | Problem Details |
-| Request media type unsupported | `415 Unsupported Media Type` | Problem Details |
-| Unexpected failure | `500 Internal Server Error` | Problem Details |
+| Every transition and history record committed | `204 No Content` | Empty |
+| Invalid body, batch size, or duplicate serial | `400 Bad Request` | Existing Problem Details with input errors only |
+| All failed entries are missing items | `404 Not Found` | Batch Problem Details with `failedItems` |
+| Any same-status or disallowed transition, including mixed missing items | `409 Conflict` | Batch Problem Details with `failedItems` |
+| Response representation unacceptable | `406 Not Acceptable` | Existing Problem Details |
+| Request media type unsupported | `415 Unsupported Media Type` | Existing Problem Details |
+| Unexpected failure | `500 Internal Server Error` | Existing sanitized Problem Details |
 
-The stable OpenAPI operation ID is `transitionInventoryStatus`.
+A one-element array uses the same batch contract. The stable operation ID remains
+`transitionInventoryStatus`. The removed single-item route has no PATCH operation. `GET`, `PUT`,
+and `DELETE /api/v1/inventory/status` still address an item whose serial is literally `status`.
 
 ### 2.2 Browse status history
 
@@ -170,7 +173,9 @@ The controller follows the inventory collection's validation behavior:
 These checks remain private controller logic rather than introducing a shared query-validation
 abstraction solely for two endpoints. The literal top-level history path has no overlap with the
 existing inventory-item path mapping. `PATCH` remains unsupported on `/api/v1/inventory` and
-`/api/v1/inventory/{serialNumber}`; only the new `/status` subresource accepts it.
+`/api/v1/inventory/{serialNumber}` (except the literal `status` batch route). Only the
+collection-level `/api/v1/inventory/status` route accepts it; the removed item-status route is
+unsupported.
 
 ### 2.4 OpenAPI and access boundary
 
@@ -180,7 +185,7 @@ or per-operation security requirement is added.
 Controller and DTO annotations document:
 
 - both paths and stable operation IDs;
-- the transition request's sole required field and all status values;
+- the transition array bounds, both required item fields, and all status values;
 - the empty `204` response;
 - history page and record schemas;
 - query defaults, bounds, allowlists, and matching semantics;
@@ -223,37 +228,34 @@ contract.
 
 ### 3.3 Transition transaction and locking
 
-`InventoryService.setStatus(String serialNumber, InventoryStatus target)` is
+`InventoryService.transitionStatus(List<InventoryStatusTransition> transitions)` is
 `@Transactional` and performs these steps in order:
 
-1. Load the inventory item through `InventoryRepository.findForUpdateBySerialNumber`, a derived
-   query method using `@Lock(LockModeType.PESSIMISTIC_WRITE)`.
-2. Throw the existing `InventoryItemNotFoundException` if no row exists.
-3. Capture the managed item's current status as `statusFrom`.
-4. Evaluate `statusFrom.canTransitionTo(target)`.
-5. If false, throw `InvalidInventoryStatusTransitionException` before mutation or history insert.
-6. Call `item.setStatus(target)` on the managed entity.
-7. Persist one new `InventoryStatusHistory(serialNumber, statusFrom, target)` through the history
-   repository.
-8. Let transaction commit flush both the managed-item update and history insert.
+1. Sort distinct serial numbers in Java natural ascending order and load each through the existing
+   `InventoryRepository.findForUpdateBySerialNumber` pessimistic write lookup. Retain all acquired
+   locks until transaction completion. Do not mutate items during lookup or validation.
+2. Iterate entries in original request order. Collect a failure for each missing row or each
+   `!item.getStatus().canTransitionTo(target)` result, including same-status requests. Capture the
+   request index, serial, requested status, stable code, and deterministic message.
+3. If failures exist, throw `InventoryStatusTransitionBatchException` containing an immutable list
+   of all failures; no item is changed and no history is saved.
+4. Otherwise iterate the original requests, capture each locked item's `statusFrom`, change only
+   its status, and persist one `InventoryStatusHistory(serialNumber, statusFrom, target)`.
+5. Commit all item updates and history inserts in the same transaction. Failure in any write,
+   flush, or commit rolls back the whole batch, including earlier history inserts.
 
-The exception contains serial number, source status, and target status for deterministic problem
-construction. It is a service-layer exception, matching the existing not-found and conflict
-exceptions; the domain enum itself has no dependency on the service or controller layers.
+The controller owns HTTP input validation; the service accepts validated, unique entries. The
+service-layer exception holds failure records without depending on DTOs. `ApiExceptionHandler`
+maps those records to the batch response described in §5.1. There is no partial-success mode.
 
-The item update and history insert share one transaction. A persistence failure during either
-flush rolls back both. Validation, not-found, same-status, and disallowed-transition failures occur
-before a history entity is saved.
+Consistent lock order makes overlapping batches serialize regardless of request order. A waiting
+batch validates against newly committed statuses after acquiring the locks. Missing rows cannot
+be locked; absence is judged at lookup time, and missing entries never cause item creation.
+There is no version column, retry loop, ETag, or client-supplied expected status.
 
-The pessimistic row lock makes two concurrent dedicated transitions execute serially. The second
-request evaluates its rule against the status committed by the first request, then either proceeds
-from that status or receives `409`. No version column, retry loop, ETag, or client-supplied expected
-status is introduced.
-
-Existing `PUT` and delete implementations are not changed to acquire this explicit lock. Their
+Existing `PUT` and delete implementations are not changed to acquire these explicit locks. Their
 concurrent interaction with `PATCH` remains ordinary PostgreSQL row-update serialization and
-last-committer behavior, consistent with the requirements' concurrency exclusions and the rule
-that existing endpoints remain unchanged.
+last-committer behavior, consistent with the requirements' concurrency exclusions.
 
 ### 3.4 History list service flow
 
@@ -270,7 +272,7 @@ accurate `totalElements` and `totalPages`; no in-memory filtering, sorting, or p
 
 ### 4.1 Append-only V2 migration
 
-The shipped V1 migration is not edited. A new
+The shipped V1 and V2 migrations are not edited for the batch change. The existing
 `src/main/resources/db/migration/V2__create_inventory_status_history.sql` creates only
 Inventory-owned objects:
 
@@ -352,7 +354,7 @@ to find rows whose item was deleted.
 
 ### 4.4 Retention and immutability
 
-Production code inserts history only in `InventoryService.setStatus`. It never updates or
+Production code inserts history only in `InventoryService.transitionStatus`. It never updates or
 deletes history, and no API operation exposes those actions. Entity immutability and non-updatable
 column mappings prevent dirty-checking updates. The absence of an item foreign key preserves rows
 through `InventoryService.delete` and through direct deletion of an Inventory-owned item row.
@@ -372,46 +374,62 @@ migration.
 
 ## 5. Validation and error contract
 
-### 5.1 Invalid transition problem
+### 5.1 Batch transition problems
 
-`ApiExceptionHandler` maps `InvalidInventoryStatusTransitionException` to:
+`ApiExceptionHandler` maps `InventoryStatusTransitionBatchException` to a
+`InventoryStatusTransitionProblemResponse` with RFC 9457 fields and required `failedItems`.
+If any entry has `INVALID_INVENTORY_STATUS_TRANSITION`, the top-level status/type/title/code remain
+`409`, `urn:rentflow:problem:invalid-inventory-status-transition`, `Invalid inventory status
+transition`, and `INVALID_INVENTORY_STATUS_TRANSITION`. Otherwise they are `404`,
+`urn:rentflow:problem:inventory-item-not-found`, `Inventory item not found`, and
+`INVENTORY_ITEM_NOT_FOUND`. In either case `detail` is `No inventory statuses were changed.`.
 
 ```json
 {
   "type": "urn:rentflow:problem:invalid-inventory-status-transition",
   "title": "Invalid inventory status transition",
   "status": 409,
-  "detail": "Inventory item 'DRILL-001' cannot transition from RENTED to AVAILABLE.",
-  "instance": "/api/v1/inventory/DRILL-001/status",
-  "code": "INVALID_INVENTORY_STATUS_TRANSITION"
+  "detail": "No inventory statuses were changed.",
+  "instance": "/api/v1/inventory/status",
+  "code": "INVALID_INVENTORY_STATUS_TRANSITION",
+  "failedItems": [
+    {"index": 0, "serialNumber": "DRILL-001", "status": "AVAILABLE",
+     "code": "INVALID_INVENTORY_STATUS_TRANSITION",
+     "message": "Inventory item 'DRILL-001' cannot transition from RENTED to AVAILABLE."},
+    {"index": 2, "serialNumber": "MISSING", "status": "RESERVED",
+     "code": "INVENTORY_ITEM_NOT_FOUND", "message": "Inventory item 'MISSING' was not found."}
+  ]
 }
 ```
 
-The same response is used for a same-status target and every other disallowed pair. No field
-violation is included because the target enum value is syntactically valid; it conflicts with the
-current persisted resource state.
+Failures are in ascending zero-based request index order, independent of lock order. All and only
+failed entries appear: an otherwise permitted entry rolled back with the batch is not a failed
+entry. Each entry has exactly `index`, `serialNumber`, requested `status`, `code`, and `message`.
+The same representation applies to a one-element array. No `violations` accompany lifecycle
+failures. Existing unrelated `ProblemResponse` schemas and responses remain unchanged.
 
 ### 5.2 Validation and framework failures
 
-The feature reuses the existing RFC 9457 catalogue except for the new `409` entry:
+Input validation precedes repository lookup and lifecycle evaluation. Bean Validation checks the
+array size, non-null entries, required fields, and serial syntax; duplicate detection runs before
+service invocation. Bound field errors use indexed `violations` such as `[0].serialNumber` and
+`[1].status`; duplicate serial violations identify subsequent occurrences as `[i].serialNumber`.
+Batch size violations use `request`. These responses do not contain `failedItems`.
 
 | Condition | Status and mapping |
 | --- | --- |
-| Missing or null body `status` | `400 VALIDATION_FAILED`, violation field `status` |
-| Undefined status token | `400 VALIDATION_FAILED`, violation field `status` |
-| Malformed JSON or unknown JSON member | `400 MALFORMED_JSON` |
-| Invalid serial path syntax | `400 VALIDATION_FAILED`, violation field `serialNumber` |
-| Missing item | Existing `404 INVENTORY_ITEM_NOT_FOUND` |
-| Same or disallowed transition | New `409 INVALID_INVENTORY_STATUS_TRANSITION` |
+| Missing/null status, missing/invalid serial, null entry, empty or over-100 array, duplicate serial | `400 VALIDATION_FAILED` with input violations |
+| Undefined enum token | Existing `400 VALIDATION_FAILED`, violation field `status`; deserialization may stop at the first token |
+| Malformed JSON, wrong top-level shape, missing/null body, or unknown member | Existing `400 MALFORMED_JSON`; parsing may fail before other input errors can be collected |
+| All failed items missing | `404 INVENTORY_ITEM_NOT_FOUND` with all failures |
+| Any same/disallowed transition | `409 INVALID_INVENTORY_STATUS_TRANSITION` with all failures |
 | Unsupported request media | Existing `415 UNSUPPORTED_MEDIA_TYPE` |
-| Invalid history query | `400 VALIDATION_FAILED` with the rejected query field |
+| Invalid history query | Existing `400 VALIDATION_FAILED` with the rejected query field |
 | Unacceptable response media | Existing `406 NOT_ACCEPTABLE` |
-| Unexpected persistence or server error | Existing sanitized `500 INTERNAL_ERROR` |
+| Unexpected persistence or server error | Existing sanitized `500 INTERNAL_ERROR`, without an invented item-failure list |
 
-Rejected requests do not call the history repository's save path. If a persistence exception
-occurs after mutation begins, transaction rollback leaves both tables unchanged and the existing
-unexpected-error handler prevents SQL, constraint, connection, and credential details from
-reaching the response.
+Unexpected write failures roll back both tables for the whole batch. Infrastructure failures may
+prevent complete evaluation and therefore retain the generic sanitized server-error contract.
 
 ## 6. Package and class changes
 
@@ -419,13 +437,13 @@ All additions use the existing prescribed packages:
 
 | Package | New or changed types |
 | --- | --- |
-| `controller` | Change `InventoryController`; add `InventoryHistoryController`; change `ApiExceptionHandler` |
-| `dto` | Add `InventoryStatusUpdateDTO`, `InventoryStatusHistoryDTO` |
-| `converter` | Add `InventoryStatusHistoryConverter` |
-| `service` | Change `InventoryService`; add `InventoryStatusHistorySortField`, `InvalidInventoryStatusTransitionException` |
-| `repository` | Change `InventoryRepository`; add `InventoryStatusHistoryRepository`, `InventoryStatusHistorySpecifications` |
-| `model` | Change `InventoryStatus`, `InventoryItem`; add `InventoryStatusHistory` |
-| `resources/db/migration` | Add `V2__create_inventory_status_history.sql` |
+| `controller` | Change `InventoryController`, `ApiExceptionHandler`, `RequestValidationException`; retain `InventoryHistoryController` |
+| `dto` | Change `InventoryStatusUpdateDTO`; add `InventoryStatusTransitionProblemResponse`, `InventoryStatusTransitionFailureDTO`; retain `InventoryStatusHistoryDTO` |
+| `converter` | Retain existing converters |
+| `service` | Change `InventoryService`; replace the single-item exception with `InventoryStatusTransitionBatchException`; retain sort enums |
+| `repository` | Reuse existing locked lookup, repositories, and specifications unchanged |
+| `model` | Retain `InventoryStatus`, `InventoryItem`, `InventoryStatusHistory`; add `InventoryStatusTransition` |
+| `resources/db/migration` | Retain existing V2 unchanged; no batch migration |
 
 No dependency, framework, package, folder, global paging customization, event bus, or new service
 layer is introduced. `ArchitectureTest` continues to enforce the same controller-to-service,
@@ -435,8 +453,8 @@ service-to-repository, converter-to-DTO/model, and repository-to-model direction
 
 ### 7.1 Invariants
 
-1. Only a successful dedicated `PATCH` changes status and inserts exactly one history row in the
-   same transaction.
+1. Only a successful dedicated `PATCH` changes all requested statuses and inserts exactly one history
+   row per entry in the same transaction; failure leaves the entire batch unchanged.
 2. Every history row has a valid serial, two defined statuses, different source and target values,
    and a PostgreSQL-authored timestamp.
 3. A dedicated transition changes no inventory field other than status.
@@ -449,14 +467,14 @@ service-to-repository, converter-to-DTO/model, and repository-to-model direction
 
 | Case | Result |
 | --- | --- |
-| Target equals current status | `409`; item unchanged; no history row |
-| Source is `RETIRED` | Every target receives `409`; no history row |
+| Valid input, target equals current status | `409`; entire batch unchanged; no history rows |
+| Valid input, source is `RETIRED` | Every defined target receives `409`; entire batch unchanged |
 | Target token is unknown | `400` validation problem before service invocation |
 | Body contains an extra member | `400` malformed-JSON problem before service invocation |
-| Item disappears before locked lookup | `404`; no history row |
+| Item disappears before locked lookup | Missing failure collected; `404` if all failures are missing, otherwise `409`; no batch writes |
 | Two concurrent valid transitions | Row lock serializes them; the second evaluates the first committed target as its source |
-| History insert fails | Item update rolls back |
-| Item update fails | History insert rolls back |
+| Any history insert fails | Every batch item update and history insert rolls back |
+| Any item update fails | Every batch item update and history insert rolls back |
 | `PUT` performs a normally disallowed status change | Existing `200` replacement; no history row |
 | Item is deleted after transitions | Item retrieval returns `404`; matching history remains listed |
 | Serial filter contains `_` or `%` | Character is matched literally, not as a SQL wildcard |
@@ -476,10 +494,10 @@ Unit tests use JUnit Jupiter, AssertJ, and Mockito without a Spring context.
 | --- | --- |
 | `InventoryStatusTest` | All source/target pairs, all same-status pairs, null targets, and exact matrix exhaustiveness |
 | `InventoryItemTest` | Dedicated transition changes only status; full replacement still bypasses lifecycle rules |
-| `InventoryStatusUpdateDTOTest` | Required status validation |
+| `InventoryStatusUpdateDTOTest` | Required serial/status validation and serial syntax |
 | `InventoryStatusHistoryConverterTest` | Exact four-field mapping and no identity exposure |
 | `InventoryServiceTest` | Locked lookup; allowed transition and one history save; same/disallowed/not-found non-interaction; unchanged `PUT`; list filter/page/sort delegation and identity tie-breaker |
-| `ApiExceptionHandlerTest` | Stable invalid-transition Problem Details and continued failure sanitization |
+| `ApiExceptionHandlerTest` | Stable batch Problem Details, status precedence, failure mapping, and continued failure sanitization |
 
 Tests use explicit Java types and Mockito argument capture where repository collaboration matters.
 They do not start Spring for domain, service, converter, or handler behavior.
@@ -497,10 +515,13 @@ is untouched, and a retained history row survives item deletion and application 
 - representative rejected pairs from every source, every same-status request, and all `RETIRED`
   targets;
 - `204` with an empty body and mutation of status only;
-- exactly one persisted row with correct before/after values and a bounded DB timestamp;
+- exactly one persisted row per successful entry with correct before/after values and a bounded DB timestamp;
 - malformed, missing, null, unknown, extra-member, unsupported-media, invalid-path, missing-item,
   and invalid-transition requests producing no history;
-- two concurrent dedicated transitions proving lock serialization;
+- successful multi-item batches and complete request-ordered failures with `404`/`409` precedence;
+- duplicates, null entries, invalid serials, empty arrays, the 100-item boundary, and old-route removal;
+- two concurrent overlapping batches in reversed input order proving lock serialization;
+- injected failures on a later batch item/history insert proving whole-batch rollback;
 - unchanged `PUT` acceptance and absence of `PUT` history;
 - history survival and list visibility after item deletion;
 - history defaults, page bounds, past-end and empty pages, accurate totals, literal partial serial
@@ -512,11 +533,9 @@ Assertions inspect the real PostgreSQL tables rather than replacing persistence 
 
 ### 8.3 OpenAPI and architecture verification
 
-`OpenApiIT` changes its exact operation count and asserts both new operation IDs, request and
+`OpenApiIT` preserves the seven-operation count and asserts both existing operation IDs, request and
 response schemas, four history fields, absence of history `id`, status enum values, query defaults
-and allowlists, `204` without content, and all applicable error schemas. The prior blanket
-PATCH-absence assertion is replaced with an assertion that PATCH exists only on the `/status`
-subresource; the other CRUD contract assertions remain.
+and allowlists, `204` without content, and all applicable error schemas. The path assertions require PATCH only on `/api/v1/inventory/status`; the other CRUD contract assertions remain.
 
 `ArchitectureTest` needs no new layer. It automatically includes the new controller, converter,
 DTO, service collaborators, repositories, and entity in the existing package, suffix, mapping,
@@ -534,6 +553,7 @@ The final implementation task runs `mvn -B -ntp clean verify` and must finish wi
 | AC1.4-AC1.5 | §3.1, §3.3, §5.1 |
 | AC1.6 | §2.1, §3.3, §5.2 |
 | AC1.7-AC1.8 | §2.1, §2.3, §5.2 |
+| AC1.9-AC1.12 | §2.1, §3.3, §5.1-§5.2 |
 | AC2.1-AC2.3 | §3.3, §4.1-§4.2, §5.2 |
 | AC2.4-AC2.5 | §4.1, §4.4 |
 | AC3.1-AC3.2 | §2.2, §3.4 |
@@ -548,4 +568,4 @@ The final implementation task runs `mvn -B -ntp clean verify` and must finish wi
 | AC5.3-AC5.4 | §2.1-§2.4 |
 
 Every acceptance criterion has a concrete HTTP, domain, persistence, error, documentation, or
-verification design surface. Task-level traceability will be added in `tasks.md`.
+verification design surface. Task-level traceability is recorded in `tasks.md`, with T5 covering the batch amendment.

@@ -14,10 +14,11 @@ class InventoryStatusUpdateDTOTest {
     @Test
     void requiresAStatus() {
         try (ValidatorFactory factory = Validation.buildDefaultValidatorFactory()) {
-            assertThat(factory.getValidator().validate(new InventoryStatusUpdateDTO(null)))
+            assertThat(factory.getValidator().validate(new InventoryStatusUpdateDTO("DRILL-001", null)))
                     .extracting(violation -> violation.getPropertyPath().toString())
                     .containsExactly("status");
-            assertThat(factory.getValidator().validate(new InventoryStatusUpdateDTO(InventoryStatus.RENTED)))
+            assertThat(factory.getValidator()
+                            .validate(new InventoryStatusUpdateDTO("DRILL-001", InventoryStatus.RENTED)))
                     .isEmpty();
         }
     }

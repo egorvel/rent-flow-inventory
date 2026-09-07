@@ -1,11 +1,15 @@
 package com.rentflow.controller;
 
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
@@ -29,16 +33,20 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.rentflow.converter.InventoryConverter;
 import com.rentflow.dto.InventoryItemDTO;
+import com.rentflow.dto.InventoryStatusTransitionProblemResponse;
 import com.rentflow.dto.InventoryStatusUpdateDTO;
 import com.rentflow.dto.ProblemResponse;
+import com.rentflow.dto.ViolationResponse;
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
+import com.rentflow.model.InventoryStatusTransition;
 import com.rentflow.service.InventoryService;
 import com.rentflow.service.InventorySortField;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.headers.Header;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -247,23 +255,23 @@ public class InventoryController {
         return converter.toResponse(service.replace(item));
     }
 
-    @Operation(operationId = "transitionInventoryStatus", summary = "Transition an inventory item's status")
+    @Operation(operationId = "transitionInventoryStatus", summary = "Transition inventory statuses atomically")
     @ApiResponses({
-        @ApiResponse(responseCode = "204", description = "Inventory status transitioned."),
+        @ApiResponse(responseCode = "204", description = "All inventory statuses transitioned."),
         @ApiResponse(
                 responseCode = "400",
-                description = "The path or request body is invalid.",
+                description = "The request body, batch size, or serial uniqueness is invalid.",
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
                                 schema = @Schema(implementation = ProblemResponse.class))),
         @ApiResponse(
                 responseCode = "404",
-                description = "The inventory item does not exist.",
+                description = "Every failed entry is a missing item; no changes were committed.",
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
-                                schema = @Schema(implementation = ProblemResponse.class))),
+                                schema = @Schema(implementation = InventoryStatusTransitionProblemResponse.class))),
         @ApiResponse(
                 responseCode = "406",
                 description = "No acceptable response representation is available.",
@@ -273,11 +281,12 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class))),
         @ApiResponse(
                 responseCode = "409",
-                description = "The requested lifecycle transition is not permitted.",
+                description =
+                        "At least one transition is forbidden; all failed entries are reported and no changes were committed.",
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
-                                schema = @Schema(implementation = ProblemResponse.class))),
+                                schema = @Schema(implementation = InventoryStatusTransitionProblemResponse.class))),
         @ApiResponse(
                 responseCode = "415",
                 description = "The request media type is unsupported.",
@@ -293,24 +302,37 @@ public class InventoryController {
                                 mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
                                 schema = @Schema(implementation = ProblemResponse.class)))
     })
-    @PatchMapping(path = "/{serialNumber}/status", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @PatchMapping(path = "/status", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Void> transitionStatus(
-            @Parameter(
-                            description = "Case-sensitive inventory serial number.",
-                            required = true,
-                            schema =
-                                    @Schema(
-                                            minLength = 1,
-                                            maxLength = 64,
-                                            pattern = InventoryItemDTO.SERIAL_NUMBER_PATTERN))
-                    @PathVariable
-                    @Pattern(regexp = InventoryItemDTO.SERIAL_NUMBER_PATTERN, message = "must be a valid serial number") String serialNumber,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
-                            description = "The sole target status for the lifecycle transition.",
-                            required = true)
+                            description =
+                                    "1–100 unique serial/status objects. All transitions and history commit atomically.",
+                            required = true,
+                            content =
+                                    @Content(
+                                            array =
+                                                    @ArraySchema(
+                                                            minItems = 1,
+                                                            maxItems = 100,
+                                                            schema =
+                                                                    @Schema(
+                                                                            implementation =
+                                                                                    InventoryStatusUpdateDTO.class))))
                     @Valid @RequestBody
-                    InventoryStatusUpdateDTO request) {
-        service.transitionStatus(serialNumber, request.status());
+                    @Size(min = 1, max = 100, message = "must contain between 1 and 100 items") List<@NotNull(message = "must not be null") InventoryStatusUpdateDTO> request) {
+        Set<String> serialNumbers = new HashSet<>();
+        List<ViolationResponse> violations = new ArrayList<>();
+        for (int index = 0; index < request.size(); index++) {
+            if (!serialNumbers.add(request.get(index).serialNumber())) {
+                violations.add(new ViolationResponse("[" + index + "].serialNumber", "must not be repeated"));
+            }
+        }
+        if (!violations.isEmpty()) {
+            throw new RequestValidationException(violations);
+        }
+        service.transitionStatus(request.stream()
+                .map(item -> new InventoryStatusTransition(item.serialNumber(), item.status()))
+                .toList());
         return ResponseEntity.noContent().build();
     }
 

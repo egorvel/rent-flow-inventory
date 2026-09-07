@@ -209,9 +209,9 @@ class InventoryIT extends PostgresIntegrationTest {
         repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Original", source));
         Instant before = Instant.now();
 
-        ResultActions response = mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
+        ResultActions response = mockMvc.perform(patch("/api/v1/inventory/status")
                 .contentType(MediaType.APPLICATION_JSON)
-                .content(statusUpdateRequest(target)));
+                .content(statusUpdateRequest("DRILL-001", target)));
 
         if (permitted) {
             response.andExpect(status().isNoContent()).andExpect(content().string(""));
@@ -230,7 +230,13 @@ class InventoryIT extends PostgresIntegrationTest {
                     .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
                     .andExpect(jsonPath("$.type").value("urn:rentflow:problem:invalid-inventory-status-transition"))
                     .andExpect(jsonPath("$.code").value("INVALID_INVENTORY_STATUS_TRANSITION"))
-                    .andExpect(jsonPath("$.detail")
+                    .andExpect(jsonPath("$.detail").value("No inventory statuses were changed."))
+                    .andExpect(jsonPath("$.failedItems.length()").value(1))
+                    .andExpect(jsonPath("$.failedItems[0].index").value(0))
+                    .andExpect(jsonPath("$.failedItems[0].serialNumber").value("DRILL-001"))
+                    .andExpect(jsonPath("$.failedItems[0].status").value(target.name()))
+                    .andExpect(jsonPath("$.failedItems[0].code").value("INVALID_INVENTORY_STATUS_TRANSITION"))
+                    .andExpect(jsonPath("$.failedItems[0].message")
                             .value("Inventory item 'DRILL-001' cannot transition from " + source + " to " + target
                                     + "."));
             assertThat(repository.findById("DRILL-001").orElseThrow().getStatus())
@@ -242,92 +248,251 @@ class InventoryIT extends PostgresIntegrationTest {
     @Test
     void rejectsInvalidTransitionRequestsWithoutHistory() throws Exception {
         repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE));
-
+        for (String body :
+                List.of("[{\"serialNumber\":\"DRILL-001\"}]", "[{\"serialNumber\":\"DRILL-001\",\"status\":null}]")) {
+            expectValidation(
+                            mockMvc.perform(patch("/api/v1/inventory/status")
+                                    .contentType(MediaType.APPLICATION_JSON)
+                                    .content(body)),
+                            "/api/v1/inventory/status")
+                    .andExpect(jsonPath("$.violations[0].field").value("[0].status"));
+        }
         expectValidation(
-                        mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
+                        mockMvc.perform(patch("/api/v1/inventory/status")
                                 .contentType(MediaType.APPLICATION_JSON)
-                                .content("{}")),
-                        "/api/v1/inventory/DRILL-001/status")
-                .andExpect(jsonPath("$.violations[0].field").value("status"));
-        expectValidation(
-                        mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"status\":null}")),
-                        "/api/v1/inventory/DRILL-001/status")
-                .andExpect(jsonPath("$.violations[0].field").value("status"));
-        expectValidation(
-                        mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
-                                .contentType(MediaType.APPLICATION_JSON)
-                                .content("{\"status\":\"UNKNOWN\"}")),
-                        "/api/v1/inventory/DRILL-001/status")
+                                .content("[{\"serialNumber\":\"DRILL-001\",\"status\":\"UNKNOWN\"}]")),
+                        "/api/v1/inventory/status")
                 .andExpect(jsonPath("$.violations[0].field").value("status"));
         expectProblem(
-                mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
+                mockMvc.perform(patch("/api/v1/inventory/status")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"status\":\"RESERVED\",\"extra\":true}")),
+                        .content("[{\"serialNumber\":\"DRILL-001\",\"status\":\"RESERVED\",\"extra\":true}]")),
                 HttpStatus.BAD_REQUEST,
                 "urn:rentflow:problem:malformed-json",
                 "Malformed JSON",
                 "The request body could not be read.",
-                "/api/v1/inventory/DRILL-001/status",
+                "/api/v1/inventory/status",
                 "MALFORMED_JSON");
         expectProblem(
-                mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
+                mockMvc.perform(patch("/api/v1/inventory/status")
                         .contentType(MediaType.TEXT_PLAIN)
                         .content("RESERVED")),
                 HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                 "urn:rentflow:problem:unsupported-media-type",
                 "Unsupported media type",
                 "The request media type is not supported.",
-                "/api/v1/inventory/DRILL-001/status",
+                "/api/v1/inventory/status",
                 "UNSUPPORTED_MEDIA_TYPE");
-        expectProblem(
-                mockMvc.perform(patch("/api/v1/inventory/MISSING/status")
+        mockMvc.perform(patch("/api/v1/inventory/status")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(statusUpdateRequest(InventoryStatus.RESERVED))),
-                HttpStatus.NOT_FOUND,
-                "urn:rentflow:problem:inventory-item-not-found",
-                "Inventory item not found",
-                "Inventory item 'MISSING' was not found.",
-                "/api/v1/inventory/MISSING/status",
-                "INVENTORY_ITEM_NOT_FOUND");
-
+                        .content(statusUpdateRequest("MISSING", InventoryStatus.RESERVED)))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$", aMapWithSize(7)))
+                .andExpect(jsonPath("$.type").value("urn:rentflow:problem:inventory-item-not-found"))
+                .andExpect(jsonPath("$.title").value("Inventory item not found"))
+                .andExpect(jsonPath("$.status").value(404))
+                .andExpect(jsonPath("$.detail").value("No inventory statuses were changed."))
+                .andExpect(jsonPath("$.instance").value("/api/v1/inventory/status"))
+                .andExpect(jsonPath("$.code").value("INVENTORY_ITEM_NOT_FOUND"))
+                .andExpect(jsonPath("$.failedItems.length()").value(1))
+                .andExpect(jsonPath("$.failedItems[0]", aMapWithSize(5)))
+                .andExpect(jsonPath("$.failedItems[0].index").value(0))
+                .andExpect(jsonPath("$.failedItems[0].serialNumber").value("MISSING"))
+                .andExpect(jsonPath("$.failedItems[0].status").value("RESERVED"))
+                .andExpect(jsonPath("$.failedItems[0].code").value("INVENTORY_ITEM_NOT_FOUND"))
+                .andExpect(jsonPath("$.failedItems[0].message").value("Inventory item 'MISSING' was not found."));
         assertThat(historyRepository.count()).isZero();
         assertThat(repository.findById("DRILL-001").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+    }
+
+    @Test
+    void reportsEveryFailedItemInRequestOrderAndRollsBackValidEntries() throws Exception {
+        repository.saveAndFlush(new InventoryItem("A-VALID", "Drill", "Original", InventoryStatus.AVAILABLE));
+        repository.saveAndFlush(new InventoryItem("Z-RETIRED", "Drill", "Original", InventoryStatus.RETIRED));
+        repository.saveAndFlush(new InventoryItem("S-SAME", "Drill", "Original", InventoryStatus.RESERVED));
+        mockMvc.perform(patch("/api/v1/inventory/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                [
+                  {"serialNumber":"Z-RETIRED","status":"AVAILABLE"},
+                  {"serialNumber":"A-VALID","status":"RENTED"},
+                  {"serialNumber":"MISSING","status":"RESERVED"},
+                  {"serialNumber":"S-SAME","status":"RESERVED"}
+                ]
+                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INVALID_INVENTORY_STATUS_TRANSITION"))
+                .andExpect(jsonPath("$.failedItems.length()").value(3))
+                .andExpect(jsonPath("$.failedItems[*].index", contains(0, 2, 3)))
+                .andExpect(jsonPath("$.failedItems[*].serialNumber", contains("Z-RETIRED", "MISSING", "S-SAME")))
+                .andExpect(jsonPath("$.failedItems[*].status", contains("AVAILABLE", "RESERVED", "RESERVED")))
+                .andExpect(jsonPath(
+                        "$.failedItems[*].code",
+                        contains(
+                                "INVALID_INVENTORY_STATUS_TRANSITION",
+                                "INVENTORY_ITEM_NOT_FOUND",
+                                "INVALID_INVENTORY_STATUS_TRANSITION")))
+                .andExpect(jsonPath(
+                        "$.failedItems[*].message",
+                        contains(
+                                "Inventory item 'Z-RETIRED' cannot transition from RETIRED to AVAILABLE.",
+                                "Inventory item 'MISSING' was not found.",
+                                "Inventory item 'S-SAME' cannot transition from RESERVED to RESERVED.")))
+                .andExpect(jsonPath("$.violations").doesNotExist());
+        assertThat(repository.findById("A-VALID").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+        assertThat(repository.findById("Z-RETIRED").orElseThrow().getStatus()).isEqualTo(InventoryStatus.RETIRED);
+        assertThat(repository.findById("S-SAME").orElseThrow().getStatus()).isEqualTo(InventoryStatus.RESERVED);
+        assertThat(repository.count()).isEqualTo(3);
+        assertThat(historyRepository.count()).isZero();
+
+        mockMvc.perform(patch("/api/v1/inventory/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                [{"serialNumber":"Z-MISSING","status":"RESERVED"},
+                 {"serialNumber":"A-VALID","status":"RENTED"},
+                 {"serialNumber":"B-MISSING","status":"RENTED"}]
+                """))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("INVENTORY_ITEM_NOT_FOUND"))
+                .andExpect(jsonPath("$.failedItems[*].index", contains(0, 2)))
+                .andExpect(jsonPath("$.failedItems[*].serialNumber", contains("Z-MISSING", "B-MISSING")));
+        assertThat(repository.findById("A-VALID").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+        assertThat(repository.count()).isEqualTo(3);
+        assertThat(historyRepository.count()).isZero();
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidBatchBodies")
+    void rejectsBatchInputBeforeEvaluatingLifecycleRules(String body) throws Exception {
+        repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RETIRED));
+        mockMvc.perform(patch("/api/v1/inventory/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.failedItems").doesNotExist());
+        assertThat(repository.findById("DRILL-001").orElseThrow().getStatus()).isEqualTo(InventoryStatus.RETIRED);
+        assertThat(historyRepository.count()).isZero();
+    }
+
+    private static Stream<String> invalidBatchBodies() {
+        String conflicting = "{\"serialNumber\":\"DRILL-001\",\"status\":\"AVAILABLE\"}";
+        return Stream.of(
+                "",
+                "null",
+                "{}",
+                "[]",
+                "[null]",
+                "[",
+                "[{}]",
+                "[" + conflicting + "," + conflicting + "]",
+                "[" + conflicting + ",{\"serialNumber\":\"DRILL-001\",\"status\":\"RENTED\"}]",
+                "[" + conflicting + ",{\"status\":\"RENTED\"}]",
+                "[" + conflicting + ",{\"serialNumber\":null,\"status\":\"RENTED\"}]",
+                "[" + conflicting + ",{\"serialNumber\":\"bad serial\",\"status\":\"RENTED\"}]",
+                "[{\"serialNumber\":\"" + "A".repeat(65) + "\",\"status\":\"RENTED\"}]",
+                "[{\"serialNumber\":\" \",\"status\":\"RENTED\"}]",
+                "[" + conflicting + ",{\"serialNumber\":\"VALID\",\"status\":\"UNKNOWN\"}]",
+                "[" + conflicting + ",{\"serialNumber\":\"VALID\",\"status\":null}]");
+    }
+
+    @Test
+    void acceptsOneHundredItemsAndRejectsOneHundredAndOne() throws Exception {
+        List<String> entries = new java.util.ArrayList<>();
+        for (int index = 0; index < 101; index++) {
+            String serial = "ITEM-" + index;
+            repository.saveAndFlush(new InventoryItem(serial, "Drill", "Original", InventoryStatus.AVAILABLE));
+            entries.add("{\"serialNumber\":\"" + serial + "\",\"status\":\"RENTED\"}");
+        }
+        mockMvc.perform(patch("/api/v1/inventory/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("[" + String.join(",", entries) + "]"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.violations[0].field").value("request"));
+        assertThat(repository.findAll())
+                .allSatisfy(item -> assertThat(item.getStatus()).isEqualTo(InventoryStatus.AVAILABLE));
+        assertThat(historyRepository.count()).isZero();
+        Instant before = Instant.now();
+        mockMvc.perform(patch("/api/v1/inventory/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("[" + String.join(",", entries.subList(0, 100)) + "]"))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+        assertThat(historyRepository.findAll()).hasSize(100).allSatisfy(history -> {
+            assertThat(history.getStatusFrom()).isEqualTo(InventoryStatus.AVAILABLE);
+            assertThat(history.getStatusTo()).isEqualTo(InventoryStatus.RENTED);
+            assertThat(history.getTimestamp()).isBetween(before, Instant.now());
+        });
+        assertThat(historyRepository.findAll())
+                .extracting(InventoryStatusHistory::getSerialNumber)
+                .doesNotHaveDuplicates();
+        for (int index = 0; index < 101; index++) {
+            InventoryItem item = repository.findById("ITEM-" + index).orElseThrow();
+            assertThat(item.getStatus()).isEqualTo(index < 100 ? InventoryStatus.RENTED : InventoryStatus.AVAILABLE);
+            assertThat(item.getType()).isEqualTo("Drill");
+            assertThat(item.getName()).isEqualTo("Original");
+        }
+    }
+
+    @Test
+    void removesTheOldRouteAndPreservesCrudForSerialStatus() throws Exception {
+        repository.saveAndFlush(new InventoryItem("status", "Drill", "Original", InventoryStatus.AVAILABLE));
+        mockMvc.perform(patch("/api/v1/inventory/status/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"status\":\"RENTED\"}"))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/api/v1/inventory/status"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.serialNumber").value("status"));
+        mockMvc.perform(put("/api/v1/inventory/status")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(validRequest("status", "Drill", "Updated", "RETIRED")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("RETIRED"));
+        mockMvc.perform(delete("/api/v1/inventory/status")).andExpect(status().isNoContent());
+        assertThat(historyRepository.count()).isZero();
     }
 
     @Test
     void rollsBackBothTablesWhenEitherWriteFails() throws Exception {
         repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE));
 
+        repository.saveAndFlush(new InventoryItem("SECOND", "Mixer", "Original", InventoryStatus.AVAILABLE));
+        String batch = "[{\"serialNumber\":\"DRILL-001\",\"status\":\"RESERVED\"},"
+                + "{\"serialNumber\":\"SECOND\",\"status\":\"RENTED\"}]";
+
         createFailingTrigger("inventory_status_history", "fail_history_insert", "INSERT");
         try {
-            mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
+            mockMvc.perform(patch("/api/v1/inventory/status")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(statusUpdateRequest(InventoryStatus.RESERVED)))
+                            .content(batch))
                     .andExpect(status().isInternalServerError());
         } finally {
             dropFailingTrigger("inventory_status_history", "fail_history_insert");
         }
         assertThat(repository.findById("DRILL-001").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+        assertThat(repository.findById("SECOND").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
         assertThat(historyRepository.count()).isZero();
 
         createFailingTrigger("inventory_items", "fail_item_update", "UPDATE");
         try {
-            mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
+            mockMvc.perform(patch("/api/v1/inventory/status")
                             .contentType(MediaType.APPLICATION_JSON)
-                            .content(statusUpdateRequest(InventoryStatus.RESERVED)))
+                            .content(batch))
                     .andExpect(status().isInternalServerError());
         } finally {
             dropFailingTrigger("inventory_items", "fail_item_update");
         }
         assertThat(repository.findById("DRILL-001").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+        assertThat(repository.findById("SECOND").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
         assertThat(historyRepository.count()).isZero();
     }
 
     @Test
     void serializesConcurrentDedicatedTransitions() throws Exception {
         repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.AVAILABLE));
+        repository.saveAndFlush(new InventoryItem("MIXER-001", "Mixer", "Original", InventoryStatus.AVAILABLE));
         CountDownLatch ready = new CountDownLatch(2);
         CountDownLatch start = new CountDownLatch(1);
 
@@ -336,9 +501,13 @@ class InventoryIT extends PostgresIntegrationTest {
                     .map(target -> executor.submit(() -> {
                         ready.countDown();
                         start.await();
-                        return mockMvc.perform(patch("/api/v1/inventory/DRILL-001/status")
-                                        .contentType(MediaType.APPLICATION_JSON)
-                                        .content(statusUpdateRequest(target)))
+                        return mockMvc.perform(
+                                        patch("/api/v1/inventory/status")
+                                                .contentType(MediaType.APPLICATION_JSON)
+                                                .content(
+                                                        target == InventoryStatus.RESERVED
+                                                                ? "[{\"serialNumber\":\"DRILL-001\",\"status\":\"RESERVED\"},{\"serialNumber\":\"MIXER-001\",\"status\":\"RESERVED\"}]"
+                                                                : "[{\"serialNumber\":\"MIXER-001\",\"status\":\"RENTED\"},{\"serialNumber\":\"DRILL-001\",\"status\":\"RENTED\"}]"))
                                 .andReturn()
                                 .getResponse()
                                 .getStatus();
@@ -352,13 +521,22 @@ class InventoryIT extends PostgresIntegrationTest {
                     .contains(204);
         }
 
-        List<InventoryStatusHistory> history = historyRepository.findAll(Sort.by("id"));
-        InventoryStatus expectedSource = InventoryStatus.AVAILABLE;
-        for (InventoryStatusHistory record : history) {
-            assertThat(record.getStatusFrom()).isEqualTo(expectedSource);
-            expectedSource = record.getStatusTo();
+        for (String serial : List.of("DRILL-001", "MIXER-001")) {
+            List<InventoryStatusHistory> history = historyRepository.findAll(Sort.by("id")).stream()
+                    .filter(record -> record.getSerialNumber().equals(serial))
+                    .toList();
+            assertThat(history).isNotEmpty();
+            InventoryStatus expectedSource = InventoryStatus.AVAILABLE;
+            for (InventoryStatusHistory record : history) {
+                assertThat(record.getStatusFrom()).isEqualTo(expectedSource);
+                assertThat(isPermittedTransition(record.getStatusFrom(), record.getStatusTo()))
+                        .isTrue();
+                expectedSource = record.getStatusTo();
+            }
+            assertThat(repository.findById(serial).orElseThrow().getStatus()).isEqualTo(expectedSource);
         }
-        assertThat(repository.findById("DRILL-001").orElseThrow().getStatus()).isEqualTo(expectedSource);
+        assertThat(repository.findById("DRILL-001").orElseThrow().getStatus())
+                .isEqualTo(repository.findById("MIXER-001").orElseThrow().getStatus());
     }
 
     @Test
@@ -562,9 +740,9 @@ class InventoryIT extends PostgresIntegrationTest {
     @Test
     void keepsDeletedItemHistoryAndDoesNotShadowTheHistorySerialNumber() throws Exception {
         repository.saveAndFlush(new InventoryItem("DRILL-AUDIT", "Drill", "Audit", InventoryStatus.AVAILABLE));
-        mockMvc.perform(patch("/api/v1/inventory/DRILL-AUDIT/status")
+        mockMvc.perform(patch("/api/v1/inventory/status")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(statusUpdateRequest(InventoryStatus.RESERVED)))
+                        .content(statusUpdateRequest("DRILL-AUDIT", InventoryStatus.RESERVED)))
                 .andExpect(status().isNoContent());
         mockMvc.perform(delete("/api/v1/inventory/DRILL-AUDIT")).andExpect(status().isNoContent());
 
@@ -859,9 +1037,9 @@ class InventoryIT extends PostgresIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validationRequest("NOAUTH-001", "RENTED")))
                 .andExpect(status().isOk());
-        mockMvc.perform(patch("/api/v1/inventory/NOAUTH-001/status")
+        mockMvc.perform(patch("/api/v1/inventory/status")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(statusUpdateRequest(InventoryStatus.INSPECTION_REQUIRED)))
+                        .content(statusUpdateRequest("NOAUTH-001", InventoryStatus.INSPECTION_REQUIRED)))
                 .andExpect(status().isNoContent());
         mockMvc.perform(delete("/api/v1/inventory/NOAUTH-001")).andExpect(status().isNoContent());
     }
@@ -1083,12 +1261,8 @@ class InventoryIT extends PostgresIntegrationTest {
                 """.formatted(serialNumber, status);
     }
 
-    private String statusUpdateRequest(InventoryStatus status) {
-        return """
-                {
-                  "status": "%s"
-                }
-                """.formatted(status);
+    private String statusUpdateRequest(String serialNumber, InventoryStatus status) {
+        return "[{\"serialNumber\":\"%s\",\"status\":\"%s\"}]".formatted(serialNumber, status);
     }
 
     private void createFailingTrigger(String table, String trigger, String event) {
@@ -1098,7 +1272,10 @@ class InventoryIT extends PostgresIntegrationTest {
                 LANGUAGE plpgsql
                 AS $$
                 BEGIN
-                    RAISE EXCEPTION 'forced test failure';
+                    IF NEW.serial_number = 'SECOND' THEN
+                        RAISE EXCEPTION 'forced test failure';
+                    END IF;
+                    RETURN NEW;
                 END;
                 $$
                 """.formatted(trigger));

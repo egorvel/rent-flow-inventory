@@ -1,6 +1,10 @@
 # Inventory Status Transition Implementation Tasks
 
-Status: Task decomposition defined; ready for implementation.
+Status: Original T1–T4 delivered; batch amendment T5 implemented and verified locally, ready for review.
+
+The original T1–T4 below record the delivered single-item baseline. T5 supersedes their single-item
+transition contract and is the only new implementation increment; historical references describe
+the original delivery rather than authorizing recreation of shipped migrations.
 
 This plan implements `requirements.md` through the decisions in `design.md`. Each task is one safe
 commit containing its production change, the automated tests that prove it, and any documentation
@@ -8,10 +12,10 @@ needed to keep that increment reproducible.
 
 ## 1. Execution contract
 
-- Execute T1 through T4 in numeric order. Do not combine tasks or split an implementation from the
-  tests that prove it.
-- Complete one task, satisfy its entire DoD, run the full verification lifecycle, and create its
-  proposed commit before starting the next task.
+- T1 through T4 are complete. Execute the batch amendment T5 as one safe increment containing
+  implementation, tests, OpenAPI, and README updates. Do not recreate shipped work.
+- Complete one task, satisfy its entire DoD, and run the full verification lifecycle before
+  considering its proposed commit ready for review.
 - Before every commit run `mvn -B -ntp clean verify` without test, integration-test, migration, or
   formatting skip flags. If Spotless fails, run `mvn spotless:apply` and repeat the full clean
   verification.
@@ -32,6 +36,7 @@ flowchart LR
     T1["T1 History persistence"] --> T2["T2 Status transition API"]
     T2 --> T3["T3 History browsing API"]
     T3 --> T4["T4 Documentation and acceptance"]
+    T4 --> T5["T5 Atomic batch replacement"]
 ```
 
 The order is intentionally linear. T1 establishes a valid migrated schema and mapped history
@@ -231,7 +236,70 @@ AC5.1-AC5.4; `design.md` §2.1, §2.3-§2.4, §3.1-§3.3, §5, §7, §8.1-§8.3.
   `BUILD SUCCESS`; unit, migration, full-stack, OpenAPI, architecture, and formatting checks report
   no failure or skipped required suite.
 
+### T5 - Replace the single-item endpoint with atomic batches
+
+**Commit:** `feat: transition inventory statuses in atomic batches`
+
+**Depends on:** Delivered T1–T4.
+
+**Verification:** `mvn -B -ntp clean verify` completed with `BUILD SUCCESS` on 2026-09-08;
+unit, PostgreSQL 18.4 integration, OpenAPI, architecture, and formatting checks passed without
+skip flags. The implementation is in the working tree; no commit has been created.
+
+**Refs.** `requirements.md` AC1.1-AC1.12, AC2.1-AC2.5, AC3.1-AC3.9, AC4.1-AC4.3,
+AC5.1-AC5.4; `design.md` §2.1-§2.4, §3.1-§3.4, §4, §5, §6-§9.
+
+**Scope.**
+
+- Replace the existing status route with `PATCH /api/v1/inventory/status` accepting a direct array
+  of 1–100 unique serial/status objects. Keep operation ID and empty `204` success.
+- Extend input validation, introduce the model command and batch exception/response records within
+  existing layers, lock rows in ascending serial order, collect all lifecycle failures in request
+  order before mutation, and commit all status/history writes in one transaction.
+- Update existing transition tests to use arrays and add batch-specific regression coverage.
+  Keep the matrix, history read behavior, CRUD semantics, dependencies, and migrations unchanged.
+- Update OpenAPI and README in this same increment and run final full verification.
+
+**DoD.**
+
+- All 36 transition pairs retain their previous permitted/rejected outcomes through one-element
+  arrays; null targets remain disallowed by the enum. Successful multi-item requests assert empty
+  `204`, target statuses, unchanged serial/type/name, and exactly one correct history row per item
+  with a bounded PostgreSQL-authored timestamp.
+- A batch mixing valid, missing, same-status, and forbidden entries returns `409` and every failed
+  entry exactly once in original index order, with exact serial, requested status, code, and
+  message. Valid entries do not appear in `failedItems`; every item and all history stay unchanged.
+- A batch whose only failures are missing items returns `404` with all missing entries and no
+  writes, including when other entries could transition. Same-status and disallowed-only batches
+  return the stable `409` Problem Details fields and required failure list.
+- Input tests assert `400` and no writes for non-array bodies, empty arrays, 101 entries, null
+  entries, missing/null/invalid serial or status, unknown tokens/members, and duplicates (including
+  identical targets). Exactly 100 valid unique entries succeed. Parsed validation errors have
+  indexed violations; invalid input mixed with a lifecycle conflict returns only input errors.
+- Unsupported media and unexpected server errors retain sanitized Problem Details. The removed
+  single-item status path has no PATCH mapping; other inventory paths remain unsupported for
+  PATCH except the new literal route. CRUD for an item named `status` still works.
+- Mockito service tests prove deterministic serial lock order, all-entry validation before any
+  mutation/history write, capture of previous statuses, and failure collection in request order.
+- PostgreSQL tests inject failures on a later batch history insert and a later item update and
+  prove both entire tables roll back, including earlier writes. Concurrent overlapping batches
+  with reversed request order serialize; history chains remain valid and reflect final statuses.
+- Existing migration/schema ownership and history-retention tests remain green, as do all history
+  paging/filter/sort/error/visibility tests and unrestricted `PUT` regressions with no history.
+- `OpenApiIT` asserts the replacement route only, unchanged operation ID, direct array and 1–100
+  bounds, both required fields, all status values, failure-entry fields, `404`/`409` batch schemas,
+  generic input/server schemas, empty `204`, unchanged history contract, and no authentication.
+- README examples use the exact array contract and describe bounds, duplicate rejection, atomicity,
+  input-validation precedence, and the complete failed-item response with status precedence.
+- `ArchitectureTest` retains all existing dependency rules; no migration or dependency changes are
+  introduced. `mvn -B -ntp clean verify` finishes with `BUILD SUCCESS` without skip flags.
+
 ## 4. Acceptance-criteria traceability
+
+The original trace below remains applicable to unchanged behavior. T5 supersedes the single-item
+assertions for AC1.1–AC1.8, AC2.1–AC2.3, and AC5.1–AC5.3; its DoD explicitly requires the
+baseline regression suites for all remaining criteria. AC1.9–AC1.12 trace to T5 input-boundary,
+aggregate-failure, mixed-status, and validation-precedence assertions respectively.
 
 | Acceptance criteria | Primary task and regression-sensitive DoD |
 | --- | --- |
