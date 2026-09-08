@@ -30,6 +30,21 @@ A transition to the current status is not a permitted transition. A syntacticall
 for any target not listed for the current status conflicts with the item's lifecycle state and is
 rejected with `409 Conflict`.
 
+`AVAILABLE` is the rental workflow's availability gate. An item is eligible for a new reservation
+only while it is `AVAILABLE`; a successful transition to `RESERVED` claims that availability for
+one active reservation. Because competing transitions for the same item are serialized, only one
+reservation claim can succeed before the item is released or rented. Cancelling the reservation
+returns the item from `RESERVED` to `AVAILABLE`, while fulfilling it moves the item to `RENTED`.
+A direct `AVAILABLE` to `RENTED` transition remains permitted for rentals that do not first create
+a reservation.
+
+An item does not become available immediately after a rental. `RENTED` can transition only to
+`INSPECTION_REQUIRED`. A passing inspection returns the item to `AVAILABLE`; an item needing work
+moves to `UNDER_MAINTENANCE` and becomes `AVAILABLE` only after maintenance completes. Inspection
+or maintenance may instead retire an item that should no longer be rented. These guarantees apply
+to the dedicated lifecycle endpoint; the existing full-replacement endpoint remains outside the
+lifecycle workflow as described in US4.
+
 Every successful transition through the dedicated endpoint creates an immutable history record in
 an Inventory-owned database table. Each record contains the item's serial number, the status
 before the transition, the status after the transition, and the time of the transition. The item
@@ -96,6 +111,21 @@ endpoint so that the whole operation succeeds only when every equipment-state pr
 - **AC1.12 (Unwanted):** If request input validation fails, then the inventory service shall
   return only input errors with `400 Bad Request` and shall not evaluate lifecycle rules or
   perform inventory writes.
+- **AC1.13 (Ubiquitous):** The inventory service shall treat `AVAILABLE` as the only current status
+  from which the dedicated lifecycle endpoint permits a transition to `RESERVED`, so at most one
+  serialized reservation claim can succeed before the item is released or rented.
+- **AC1.14 (Event-driven):** When an active reservation is cancelled while its item is `RESERVED`,
+  the inventory service shall permit the dedicated lifecycle transition from `RESERVED` to
+  `AVAILABLE`.
+- **AC1.15 (Event-driven):** When a rental starts without a preceding reservation, the inventory
+  service shall permit the dedicated lifecycle transition from `AVAILABLE` directly to `RENTED`.
+- **AC1.16 (State-driven):** While an item is `RENTED`, the inventory service shall permit only
+  `INSPECTION_REQUIRED` as its next status through the dedicated lifecycle endpoint and shall not
+  permit it to become `AVAILABLE` directly.
+- **AC1.17 (Event-driven):** When post-rental inspection or maintenance completes, the inventory
+  service shall permit the item to become `AVAILABLE` only from `INSPECTION_REQUIRED` after a
+  passing inspection or from `UNDER_MAINTENANCE` after completed maintenance; inspection and
+  maintenance shall also permit retirement instead of renewed availability.
 
 ### US2 - Retain an audit trail of dedicated status transitions
 
@@ -295,3 +325,13 @@ For US1–US2 and AC5.1, lifecycle evaluation and new history apply to new attem
 23. **Idempotency decisions:** Required UUID v4 header; global endpoint scope; validated ordered payload fingerprint; seven-day durable terminal replay; busy `409` and mismatch `422`. See `design.md` §9.1–§9.3.
 24. **Cleanup cadence:** Daily at 03:00 UTC, configurable, with 1000-row transactions and a 60-second runtime budget. Logical expiry does not depend on the job. See `design.md` §9.4 and `tasks.md` T6.
 25. **Implementation sequence:** Extend persistence and cleanup in T6, then deliver the required API contract and retry tests in T7. See `tasks.md` §5.
+26. **Reservation availability invariant:** `AVAILABLE` is the only state eligible for a new
+    reservation claim, and the serialized `AVAILABLE` to `RESERVED` transition permits at most one
+    active claim. Cancellation returns `RESERVED` to `AVAILABLE`; fulfillment moves it to
+    `RENTED`; direct `AVAILABLE` to `RENTED` remains permitted. See AC1.13–AC1.15 and `design.md`
+    §3.1.
+27. **Post-rental availability:** A rented item must move to `INSPECTION_REQUIRED` and cannot
+    become available directly. It becomes `AVAILABLE` after passing inspection, or after required
+    maintenance completes; inspection or maintenance may retire it instead. The full-replacement
+    endpoint remains outside this lifecycle enforcement. See AC1.16–AC1.17 and `design.md` §3.1,
+    §3.2, and §7.1.

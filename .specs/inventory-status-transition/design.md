@@ -33,6 +33,8 @@ serial number happens to be `history` or another collection-like term.
 | Concurrent transitions | Pessimistic write locks acquired in ascending serial-number order serialize overlapping batches and avoid opposite lock ordering. |
 | Component boundary | `InventoryHistoryController` owns the history HTTP collection while the existing `InventoryService` owns both transition and history-list use cases. |
 | Rule ownership | `InventoryStatus` owns the exhaustive `canTransitionTo` matrix. |
+| Reservation availability | `AVAILABLE` is the only state from which the dedicated endpoint can claim an item as `RESERVED`; the item row lock serializes competing claims so at most one succeeds. |
+| Post-rental availability | `RENTED` must move to `INSPECTION_REQUIRED`; availability returns only after inspection passes directly or after required maintenance completes. |
 | Partial matching | PostgreSQL `LIKE` implements case-sensitive literal substring matching; no `pg_trgm` extension is introduced. |
 
 ### 1.3 Component flow
@@ -217,6 +219,25 @@ implements the exhaustive matrix:
 
 A null target and every same-status target return `false`. The enum is the single application
 source of transition truth; the controller and service do not reproduce status-pair lists.
+
+The matrix also defines the availability invariant for reservation and rental workflows:
+
+- `AVAILABLE` is the only source that permits `RESERVED`. The inventory row lock described in
+  §3.3 serializes competing claims, so after one request commits `RESERVED`, another reservation
+  claim is rejected against that new state. The reservation workflow must treat a successful
+  `AVAILABLE` to `RESERVED` transition as acquisition of the item's availability.
+- Cancellation releases a reserved item through `RESERVED` to `AVAILABLE`; fulfillment uses
+  `RESERVED` to `RENTED`. `AVAILABLE` to `RENTED` remains permitted for an immediate rental without
+  a prior reservation.
+- `RENTED` has exactly one permitted target, `INSPECTION_REQUIRED`, so it cannot return directly to
+  `AVAILABLE`. A passed inspection may use `INSPECTION_REQUIRED` to `AVAILABLE`; repair uses
+  `INSPECTION_REQUIRED` to `UNDER_MAINTENANCE` and then `UNDER_MAINTENANCE` to `AVAILABLE` after
+  completion. Either assessment stage may choose its permitted transition to `RETIRED`.
+
+This service stores lifecycle state rather than reservation identity or reservation records. The
+system-wide one-active-reservation rule therefore requires the reservation workflow to use this
+serialized transition as its availability gate. Creating reservation records, coordinating them
+across services, and recovering cross-service failures remain outside this feature.
 
 ### 3.2 Inventory entity mutation and unchanged replacement
 
@@ -465,6 +486,12 @@ service-to-repository, converter-to-DTO/model, and repository-to-model direction
 5. History has no foreign-key lifecycle dependency on the current item.
 6. No public history representation exposes the identity key.
 7. Every history page has a deterministic primary order plus identity tie-breaker.
+8. Through the dedicated lifecycle endpoint, only an `AVAILABLE` item can be claimed as
+   `RESERVED`, and serialized row locking permits at most one competing reservation claim to
+   succeed.
+9. A completed rental cannot make an item immediately `AVAILABLE`: `RENTED` must move to
+   `INSPECTION_REQUIRED`, followed by successful inspection or any required maintenance before
+   availability returns.
 
 ### 7.2 Edge-case outcomes
 
@@ -587,6 +614,7 @@ Expiry is checked on every request, so cleanup delays do not extend the guarante
 | AC1.6 | §2.1, §3.3, §5.2 |
 | AC1.7-AC1.8 | §2.1, §2.3, §5.2 |
 | AC1.9-AC1.12 | §2.1, §3.3, §5.1-§5.2 |
+| AC1.13-AC1.17 | §3.1, §3.3, §7.1-§7.2 |
 | AC2.1-AC2.3 | §3.3, §4.1-§4.2, §5.2 |
 | AC2.4-AC2.5 | §4.1, §4.4 |
 | AC3.1-AC3.2 | §2.2, §3.4 |
