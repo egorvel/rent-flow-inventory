@@ -1,9 +1,9 @@
 # Inventory Status Transition Implementation Tasks
 
-Status: Original T1–T4 delivered; batch amendment T5 implemented and verified locally, ready for review.
+Status: Durable idempotency and daily cleanup implemented and verified locally; ready for review.
 
 The original T1–T4 below record the delivered single-item baseline. T5 supersedes their single-item
-transition contract and is the only new implementation increment; historical references describe
+transition contract and was the batch implementation increment; historical references describe
 the original delivery rather than authorizing recreation of shipped migrations.
 
 This plan implements `requirements.md` through the decisions in `design.md`. Each task is one safe
@@ -12,8 +12,8 @@ needed to keep that increment reproducible.
 
 ## 1. Execution contract
 
-- T1 through T4 are complete. Execute the batch amendment T5 as one safe increment containing
-  implementation, tests, OpenAPI, and README updates. Do not recreate shipped work.
+- T1 through T5 are complete. Implement T6 and T7 from §5, including persistence, daily cleanup,
+  the required key contract, tests, OpenAPI and README. Do not recreate shipped work.
 - Complete one task, satisfy its entire DoD, and run the full verification lifecycle before
   considering its proposed commit ready for review.
 - Before every commit run `mvn -B -ntp clean verify` without test, integration-test, migration, or
@@ -37,6 +37,8 @@ flowchart LR
     T2 --> T3["T3 History browsing API"]
     T3 --> T4["T4 Documentation and acceptance"]
     T4 --> T5["T5 Atomic batch replacement"]
+    T5 --> T6["T6 Durable outcomes and daily cleanup"]
+    T6 --> T7["T7 Idempotent batch API"]
 ```
 
 The order is intentionally linear. T1 establishes a valid migrated schema and mapped history
@@ -206,7 +208,7 @@ AC5.1-AC5.4; `design.md` §2.1, §2.3-§2.4, §3.1-§3.3, §5, §7, §8.1-§8.3.
 
 **Depends on:** T3.
 
-**Refs.** `requirements.md` AC5.3-AC5.4; `design.md` §2.4, §6-§9.
+**Refs.** `requirements.md` AC5.3-AC5.4; `design.md` §2.4, §6-§8, §10.
 
 **Scope.**
 
@@ -244,10 +246,10 @@ AC5.1-AC5.4; `design.md` §2.1, §2.3-§2.4, §3.1-§3.3, §5, §7, §8.1-§8.3.
 
 **Verification:** `mvn -B -ntp clean verify` completed with `BUILD SUCCESS` on 2026-09-08;
 unit, PostgreSQL 18.4 integration, OpenAPI, architecture, and formatting checks passed without
-skip flags. The implementation is in the working tree; no commit has been created.
+skip flags. This records the original batch verification; T6–T7 extend that baseline.
 
 **Refs.** `requirements.md` AC1.1-AC1.12, AC2.1-AC2.5, AC3.1-AC3.9, AC4.1-AC4.3,
-AC5.1-AC5.4; `design.md` §2.1-§2.4, §3.1-§3.4, §4, §5, §6-§9.
+AC5.1-AC5.4; `design.md` §2.1-§2.4, §3.1-§3.4, §4, §5, §6-§8, §10.
 
 **Scope.**
 
@@ -328,5 +330,38 @@ aggregate-failure, mixed-status, and validation-precedence assertions respective
 | AC5.4 | T2 and T3: unauthenticated full-stack requests reach both operations |
 
 No acceptance criterion is deferred to documentation alone. T4 checks documentation and final
-traceability after T1-T3 have already made every functional criterion executable and
-regression-sensitive.
+traceability after T1-T3 made the baseline functional criteria executable and
+regression-sensitive. The idempotency criteria trace to T6–T7 below.
+
+## 5. Idempotency implementation increments
+
+T6 depends on completed T5. T7 depends on T6. Each task is one safe commit; existing T1–T5 describe the delivered baseline, with request examples updated to the required key in T7.
+
+### T6 - Persist request outcomes and clean expired records daily
+
+**Commit:** `feat: persist status transition outcomes and clean expired requests`
+
+**Depends on:** T5.
+
+**Refs.** AC6.2, AC6.3, AC6.7, AC7.1–AC7.4; `design.md` §9.3–§9.4.
+
+**DoD.** V3 creates the Inventory-owned ledger with UUID, fingerprint, terminal status, JSONB snapshot, timestamps, expiry index and no item foreign key. Migration tests assert constraints, ownership, repeated migration safety and preservation of the other-service sentinel. Real PostgreSQL tests prove completed outcomes survive a second context. Cleanup tests prove daily UTC defaults, only expired rows deleted, at most 1000 per transaction, locked rows skipped, multiple cleanup workers safe, history/unexpired rows untouched, and no new chunk after the runtime budget. Metrics tests observe counters, duration and backlog without identifier labels. `mvn -B -ntp clean verify` passes.
+
+### T7 - Require keys and replay atomic batch outcomes
+
+**Commit:** `feat: make inventory status retries idempotent`
+
+**Depends on:** T6.
+
+**Refs.** AC6.1–AC6.9, AC7.3; `design.md` §9.1–§9.4; existing US1–US5 regression coverage remains required.
+
+**DoD.** Tests assert missing/invalid/repeated headers return 400, UUID case normalization, invalid input does not consume a key, and fingerprints ignore JSON whitespace/property order while preserving array order/serial case/status. Integration tests assert 204 replay adds no history after item changes/deletion, saved 404/409 failure envelopes replay unchanged after conditions change, different payload gets 422, deterministically held execution locks return immediate busy 409 with Retry-After even for mismatches, and independent keys execute. Fault injection proves inventory/history and ledger failures roll back every write and allow same-key retry. Committed response loss and application restart replay safely. Expired records accept changed payload before cleanup. Terminal responses expose stable seven-day expiry and correct replay flags. OpenAPI and README document headers, statuses, retry guidance and coordinated cutover. Existing batch matrix, atomicity, input validation, history and PUT regression tests pass with fresh keys. `mvn -B -ntp clean verify` reports BUILD SUCCESS, and spec self-evaluation is written.
+
+| Additional criteria | Regression-sensitive DoD |
+| --- | --- |
+| AC6.1–AC6.9 | T7: header validation, semantic replay, mismatch/busy errors, rollback/restart/expiry tests and documented retry/cutover contract |
+| AC7.1–AC7.2 | T6: daily UTC defaults, bounded chunks, separate transactions, locked rows and runtime-budget tests |
+| AC7.3 | T6 cleanup preservation and T7 expiry-before-cleanup assertions |
+| AC7.4 | T6 metrics tests for counters, duration, backlog and absence of identifier labels |
+
+**T6–T7 verification:** `mvn -B -ntp clean verify` reported `BUILD SUCCESS` on 2026-09-08: 42 unit/architecture tests and 154 PostgreSQL integration/OpenAPI tests passed, with no failures, errors or skips. Spotless passed. Changes remain uncommitted in the working tree.

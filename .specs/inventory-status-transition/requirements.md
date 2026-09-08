@@ -1,6 +1,6 @@
 # Inventory Status Transition Requirements
 
-Status: Batch transition implemented and verified locally; changes ready for review.
+Status: Durable idempotency and daily cleanup implemented and verified locally; ready for review.
 
 ## Context
 
@@ -184,6 +184,31 @@ my integration can invoke them and diagnose rejected requests.
   collection endpoint without authentication credentials, the inventory service shall process the
   request according to the endpoint's functional rules.
 
+### US6 - Retry a batch safely
+
+As an API consumer, I want durable replay of completed requests so that a lost response cannot cause a second transition.
+
+- **AC6.1 (Unwanted):** If the request lacks exactly one canonical UUID v4 `Idempotency-Key` header, then the inventory service shall return `400 VALIDATION_FAILED` with an `Idempotency-Key` violation without consuming a key.
+- **AC6.2 (Event-driven):** When validated input uses a new or expired key, the inventory service shall execute the batch and atomically persist its terminal `204`, `404`, or `409` outcome with any inventory and history changes.
+- **AC6.3 (Event-driven):** When the same unexpired key and equivalent validated payload are retried, the inventory service shall replay the original status and problem fields without inventory evaluation or additional history, including after item deletion or application restart.
+- **AC6.4 (Unwanted):** If an unexpired completed key is reused with a different validated payload, then the inventory service shall return `422 IDEMPOTENCY_KEY_REUSED` without inventory changes.
+- **AC6.5 (State-driven):** While another transaction owns the key's execution lock, the inventory service shall return `409 IDEMPOTENCY_IN_PROGRESS` immediately with `Retry-After: 1`, including for a different payload.
+- **AC6.6 (Ubiquitous):** The inventory service shall scope keys globally to this endpoint, normalize UUID case, ignore JSON whitespace and object property order in payload comparison, and preserve serial casing and array order.
+- **AC6.7 (Event-driven):** When a terminal outcome is returned, the inventory service shall include `Idempotency-Replayed` and `Idempotency-Key-Expires-At`, with expiry seven days after database-recorded completion and unchanged by replay.
+- **AC6.8 (Unwanted):** If input validation or a rolled-back server failure prevents completion, then the inventory service shall leave no new terminal record and permit retry with that key.
+- **AC6.9 (Ubiquitous):** The OpenAPI contract and README shall document the required key, response headers and errors, retry/backoff guidance, seven-day guarantee, expiry reconciliation, and coordinated client/server cutover.
+
+### US7 - Remove expired replay records
+
+As an operator, I want bounded daily cleanup so that expired request records do not accumulate indefinitely.
+
+- **AC7.1 (Ubiquitous):** The inventory service shall schedule cleanup daily at 03:00 UTC by default with a configurable cron, deleting only expired request records in transactions of at most 1000 records.
+- **AC7.2 (Event-driven):** When a cleanup chunk fills its limit, the inventory service shall continue in a new transaction only while the configurable runtime budget (default 60 seconds) has not elapsed, skipping locked records safely across instances.
+- **AC7.3 (Ubiquitous):** The inventory service shall honor logical expiry independently of physical cleanup and preserve all history and unexpired replay records during cleanup.
+- **AC7.4 (Ubiquitous):** The inventory service shall expose attempt, replay, mismatch, busy, deleted-record and cleanup-failure counters, cleanup duration and expired-backlog metrics without key or serial-number labels.
+
+For US1–US2 and AC5.1, lifecycle evaluation and new history apply to new attempts; replay takes precedence as specified in US6.
+
 ## Out of scope
 
 - Applying the transition matrix to item creation or the existing full-replacement endpoint.
@@ -266,3 +291,7 @@ my integration can invoke them and diagnose rejected requests.
     `status`, `code`, and `message`, ordered by request index. See `design.md` §5.1.
 22. **Validation precedence:** Input errors return `400` before lifecycle evaluation. Parse errors
     need not be aggregated; validly parsed field errors use indexed violations. See `design.md` §5.2.
+
+23. **Idempotency decisions:** Required UUID v4 header; global endpoint scope; validated ordered payload fingerprint; seven-day durable terminal replay; busy `409` and mismatch `422`. See `design.md` §9.1–§9.3.
+24. **Cleanup cadence:** Daily at 03:00 UTC, configurable, with 1000-row transactions and a 60-second runtime budget. Logical expiry does not depend on the job. See `design.md` §9.4 and `tasks.md` T6.
+25. **Implementation sequence:** Extend persistence and cleanup in T6, then deliver the required API contract and retry tests in T7. See `tasks.md` §5.

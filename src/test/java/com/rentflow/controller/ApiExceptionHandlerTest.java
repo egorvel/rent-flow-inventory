@@ -14,11 +14,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.ServletWebRequest;
 
+import com.rentflow.converter.InventoryConverter;
 import com.rentflow.dto.InventoryStatusTransitionFailureDTO;
 import com.rentflow.dto.InventoryStatusTransitionProblemResponse;
 import com.rentflow.dto.ProblemResponse;
 import com.rentflow.model.InventoryStatus;
-import com.rentflow.service.InventoryStatusTransitionBatchException;
+import com.rentflow.model.InventoryStatusTransitionOutcome;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -88,26 +89,24 @@ class ApiExceptionHandlerTest {
     @Test
     void returnsTheStableBatchProblemAndPreservesIndividualFailures() {
         MockHttpServletRequest request = new MockHttpServletRequest("PATCH", "/api/v1/inventory/status");
-        InventoryStatusTransitionBatchException.Failure missing = new InventoryStatusTransitionBatchException.Failure(
+        InventoryStatusTransitionOutcome.Failure missing = new InventoryStatusTransitionOutcome.Failure(
                 0,
                 "MISSING",
                 InventoryStatus.RESERVED,
                 "INVENTORY_ITEM_NOT_FOUND",
                 "Inventory item 'MISSING' was not found.");
-        InventoryStatusTransitionBatchException.Failure conflict = new InventoryStatusTransitionBatchException.Failure(
+        InventoryStatusTransitionOutcome.Failure conflict = new InventoryStatusTransitionOutcome.Failure(
                 2,
                 "DRILL-001",
                 InventoryStatus.AVAILABLE,
                 "INVALID_INVENTORY_STATUS_TRANSITION",
                 "Inventory item 'DRILL-001' cannot transition from RENTED to AVAILABLE.");
-        for (List<InventoryStatusTransitionBatchException.Failure> failures :
+        for (List<InventoryStatusTransitionOutcome.Failure> failures :
                 List.of(List.of(missing), List.of(missing, conflict))) {
             boolean hasConflict = failures.size() == 2;
-            ResponseEntity<InventoryStatusTransitionProblemResponse> response = handler.handleInvalidTransition(
-                    new InventoryStatusTransitionBatchException(failures), new ServletWebRequest(request));
-            assertThat(response.getStatusCode()).isEqualTo(hasConflict ? HttpStatus.CONFLICT : HttpStatus.NOT_FOUND);
-            assertThat(response.getHeaders().getContentType()).isEqualTo(MediaType.APPLICATION_PROBLEM_JSON);
-            assertThat(response.getBody())
+            InventoryStatusTransitionProblemResponse response =
+                    new InventoryConverter().toResponse(InventoryStatusTransitionOutcome.rejected(failures));
+            assertThat(response)
                     .isEqualTo(new InventoryStatusTransitionProblemResponse(
                             hasConflict
                                     ? "urn:rentflow:problem:invalid-inventory-status-transition"

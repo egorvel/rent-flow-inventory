@@ -234,9 +234,9 @@ class OpenApiIT extends PostgresIntegrationTest {
                         .asString())
                 .isEqualTo(InventoryItemDTO.SERIAL_NUMBER_PATTERN);
         JsonNode batch = operation("/api/v1/inventory/status", "patch");
-        assertThat(batch.path("parameters").isMissingNode()
-                        || batch.path("parameters").isEmpty())
+        assertThat(parameter(batch, "Idempotency-Key").path("required").asBoolean())
                 .isTrue();
+        assertThat(parameter(batch, "Idempotency-Key").path("in").asString()).isEqualTo("header");
         assertThat(batch.at("/requestBody/required").asBoolean()).isTrue();
         JsonNode batchSchema = batch.at("/requestBody/content/application~1json/schema");
         assertThat(batchSchema.path("type").asString()).isEqualTo("array");
@@ -283,7 +283,7 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(delete.at("/responses/204").has("content")).isFalse();
 
         JsonNode transition = operation("/api/v1/inventory/status", "patch");
-        assertResponseCodes(transition, "204", "400", "404", "406", "409", "415", "500");
+        assertResponseCodes(transition, "204", "400", "404", "406", "409", "415", "422", "500");
         assertThat(transition.at("/responses/204").has("content")).isFalse();
 
         JsonNode history = operation("/api/v1/inventory-history", "get");
@@ -296,14 +296,27 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertProblemSchemas(get, Set.of("400", "404", "406", "500"));
         assertProblemSchemas(replace, Set.of("400", "404", "406", "415", "500"));
         assertProblemSchemas(delete, Set.of("400", "404", "500"));
-        assertProblemSchemas(transition, Set.of("400", "406", "415", "500"));
-        for (String code : List.of("404", "409")) {
+        assertProblemSchemas(transition, Set.of("400", "406", "415", "422", "500"));
+        for (String code : List.of("404")) {
             assertResponseSchema(
                     transition,
                     code,
                     MediaType.APPLICATION_PROBLEM_JSON_VALUE,
                     "InventoryStatusTransitionProblemResponse");
         }
+        assertThat(responseSchema(transition, "409", MediaType.APPLICATION_PROBLEM_JSON_VALUE)
+                        .path("anyOf"))
+                .extracting(node -> node.path("$ref").asString())
+                .containsExactlyInAnyOrder(
+                        "#/components/schemas/ProblemResponse",
+                        "#/components/schemas/InventoryStatusTransitionProblemResponse");
+        for (String code : List.of("204", "404", "409")) {
+            assertThat(transition.at("/responses/" + code + "/headers").has("Idempotency-Replayed"))
+                    .isTrue();
+            assertThat(transition.at("/responses/" + code + "/headers").has("Idempotency-Key-Expires-At"))
+                    .isTrue();
+        }
+        assertThat(transition.at("/responses/409/headers").has("Retry-After")).isTrue();
         assertProblemSchemas(history, Set.of("400", "406", "500"));
     }
 
@@ -366,7 +379,7 @@ class OpenApiIT extends PostgresIntegrationTest {
     private Set<String> enumValues(JsonNode rawSchema) {
         JsonNode valueSchema = resolved(rawSchema);
         Set<String> values = texts(valueSchema.path("enum"));
-        for (String composition : List.of("allOf", "oneOf", "anyOf")) {
+        for (String composition : List.of("allOf", "anyOf", "anyOf")) {
             valueSchema.path(composition).forEach(schema -> values.addAll(enumValues(schema)));
         }
         return values;

@@ -27,14 +27,12 @@ import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
-import com.rentflow.dto.InventoryStatusTransitionFailureDTO;
-import com.rentflow.dto.InventoryStatusTransitionProblemResponse;
 import com.rentflow.dto.ProblemResponse;
 import com.rentflow.dto.ViolationResponse;
 import com.rentflow.model.InventoryStatus;
+import com.rentflow.service.IdempotencyException;
 import com.rentflow.service.InventoryItemAlreadyExistsException;
 import com.rentflow.service.InventoryItemNotFoundException;
-import com.rentflow.service.InventoryStatusTransitionBatchException;
 
 import tools.jackson.databind.exc.InvalidFormatException;
 
@@ -68,28 +66,22 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                 List.of());
     }
 
-    @ExceptionHandler(InventoryStatusTransitionBatchException.class)
-    ResponseEntity<InventoryStatusTransitionProblemResponse> handleInvalidTransition(
-            InventoryStatusTransitionBatchException exception, WebRequest request) {
-        boolean conflict = exception.getFailures().stream()
-                .anyMatch(failure -> failure.code().equals("INVALID_INVENTORY_STATUS_TRANSITION"));
-        HttpStatus status = conflict ? HttpStatus.CONFLICT : HttpStatus.NOT_FOUND;
-        List<InventoryStatusTransitionFailureDTO> failures = exception.getFailures().stream()
-                .map(failure -> new InventoryStatusTransitionFailureDTO(
-                        failure.index(), failure.serialNumber(), failure.status(), failure.code(), failure.message()))
-                .toList();
-        return ResponseEntity.status(status)
-                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
-                .body(new InventoryStatusTransitionProblemResponse(
-                        conflict
-                                ? "urn:rentflow:problem:invalid-inventory-status-transition"
-                                : "urn:rentflow:problem:inventory-item-not-found",
-                        conflict ? "Invalid inventory status transition" : "Inventory item not found",
-                        status.value(),
-                        exception.getMessage(),
-                        requestPath(request),
-                        conflict ? "INVALID_INVENTORY_STATUS_TRANSITION" : "INVENTORY_ITEM_NOT_FOUND",
-                        failures));
+    @ExceptionHandler(IdempotencyException.class)
+    ResponseEntity<ProblemResponse> handleIdempotency(IdempotencyException exception, WebRequest request) {
+        boolean busy = exception.isInProgress();
+        ResponseEntity.BodyBuilder response =
+                ResponseEntity.status(busy ? 409 : 422).contentType(MediaType.APPLICATION_PROBLEM_JSON);
+        if (busy) {
+            response.header(HttpHeaders.RETRY_AFTER, "1");
+        }
+        return response.body(new ProblemResponse(
+                busy ? "urn:rentflow:problem:idempotency-in-progress" : "urn:rentflow:problem:idempotency-key-reused",
+                busy ? "Idempotent request in progress" : "Idempotency key reused",
+                busy ? 409 : 422,
+                exception.getMessage(),
+                requestPath(request),
+                busy ? "IDEMPOTENCY_IN_PROGRESS" : "IDEMPOTENCY_KEY_REUSED",
+                List.of()));
     }
 
     @ExceptionHandler(ConstraintViolationException.class)

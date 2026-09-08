@@ -2,9 +2,11 @@ package com.rentflow.controller;
 
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -40,11 +42,13 @@ import com.rentflow.dto.ViolationResponse;
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.model.InventoryStatusTransition;
+import com.rentflow.service.IdempotentStatusTransitionService;
 import com.rentflow.service.InventoryService;
 import com.rentflow.service.InventorySortField;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import io.swagger.v3.oas.annotations.headers.Header;
 import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -65,8 +69,11 @@ public class InventoryController {
 
     private final InventoryService service;
     private final InventoryConverter converter;
+    private final IdempotentStatusTransitionService transitions;
 
-    public InventoryController(InventoryService service, InventoryConverter converter) {
+    public InventoryController(
+            InventoryService service, InventoryConverter converter, IdempotentStatusTransitionService transitions) {
+        this.transitions = transitions;
         this.service = service;
         this.converter = converter;
     }
@@ -255,9 +262,42 @@ public class InventoryController {
         return converter.toResponse(service.replace(item));
     }
 
-    @Operation(operationId = "transitionInventoryStatus", summary = "Transition inventory statuses atomically")
+    @Operation(
+            operationId = "transitionInventoryStatus",
+            summary = "Transition inventory statuses atomically",
+            description =
+                    "Required UUID v4 key. Completed outcomes replay for seven days without extending expiry. A new business attempt requires a new key.",
+            parameters =
+                    @Parameter(
+                            name = "Idempotency-Key",
+                            in = ParameterIn.HEADER,
+                            required = true,
+                            description =
+                                    "Exactly one canonical UUID v4; case insensitive. Global scope for this endpoint.",
+                            schema =
+                                    @Schema(
+                                            type = "string",
+                                            format = "uuid",
+                                            minLength = 36,
+                                            maxLength = 36,
+                                            pattern =
+                                                    "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}")))
     @ApiResponses({
-        @ApiResponse(responseCode = "204", description = "All inventory statuses transitioned."),
+        @ApiResponse(
+                responseCode = "204",
+                headers = {
+                    @Header(
+                            name = "Idempotency-Replayed",
+                            description = "Whether this is a saved outcome.",
+                            schema = @Schema(type = "boolean")),
+                    @Header(
+                            name = "Idempotency-Key-Expires-At",
+                            description =
+                                    "Seven days after database-recorded completion; replay does not extend expiry.",
+                            schema = @Schema(type = "string", format = "date-time"))
+                },
+                description = "All inventory statuses transitioned.",
+                content = @Content),
         @ApiResponse(
                 responseCode = "400",
                 description = "The request body, batch size, or serial uniqueness is invalid.",
@@ -267,6 +307,17 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class))),
         @ApiResponse(
                 responseCode = "404",
+                headers = {
+                    @Header(
+                            name = "Idempotency-Replayed",
+                            description = "Whether this is a saved outcome.",
+                            schema = @Schema(type = "boolean")),
+                    @Header(
+                            name = "Idempotency-Key-Expires-At",
+                            description =
+                                    "Seven days after database-recorded completion; replay does not extend expiry.",
+                            schema = @Schema(type = "string", format = "date-time"))
+                },
                 description = "Every failed entry is a missing item; no changes were committed.",
                 content =
                         @Content(
@@ -281,15 +332,41 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class))),
         @ApiResponse(
                 responseCode = "409",
+                headers = {
+                    @Header(
+                            name = "Retry-After",
+                            description = "1 second for IDEMPOTENCY_IN_PROGRESS only.",
+                            schema = @Schema(type = "integer")),
+                    @Header(
+                            name = "Idempotency-Replayed",
+                            description = "Present only for terminal lifecycle outcomes.",
+                            schema = @Schema(type = "boolean")),
+                    @Header(
+                            name = "Idempotency-Key-Expires-At",
+                            description = "Present only for terminal lifecycle outcomes.",
+                            schema = @Schema(type = "string", format = "date-time"))
+                },
                 description =
-                        "At least one transition is forbidden; all failed entries are reported and no changes were committed.",
+                        "A lifecycle conflict with all failed entries, or IDEMPOTENCY_IN_PROGRESS while the key executes (retry after 1 second).",
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
-                                schema = @Schema(implementation = InventoryStatusTransitionProblemResponse.class))),
+                                schema =
+                                        @Schema(
+                                                anyOf = {
+                                                    InventoryStatusTransitionProblemResponse.class,
+                                                    ProblemResponse.class
+                                                }))),
         @ApiResponse(
                 responseCode = "415",
                 description = "The request media type is unsupported.",
+                content =
+                        @Content(
+                                mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
+                                schema = @Schema(implementation = ProblemResponse.class))),
+        @ApiResponse(
+                responseCode = "422",
+                description = "IDEMPOTENCY_KEY_REUSED: an unexpired completed key has a different validated payload.",
                 content =
                         @Content(
                                 mediaType = MediaType.APPLICATION_PROBLEM_JSON_VALUE,
@@ -303,7 +380,8 @@ public class InventoryController {
                                 schema = @Schema(implementation = ProblemResponse.class)))
     })
     @PatchMapping(path = "/status", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<Void> transitionStatus(
+    public ResponseEntity<?> transitionStatus(
+            @Parameter(hidden = true) HttpServletRequest servletRequest,
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                             description =
                                     "1–100 unique serial/status objects. All transitions and history commit atomically.",
@@ -320,6 +398,15 @@ public class InventoryController {
                                                                                     InventoryStatusUpdateDTO.class))))
                     @Valid @RequestBody
                     @Size(min = 1, max = 100, message = "must contain between 1 and 100 items") List<@NotNull(message = "must not be null") InventoryStatusUpdateDTO> request) {
+        List<String> keys = Collections.list(servletRequest.getHeaders("Idempotency-Key"));
+        if (keys.size() != 1
+                || !keys.getFirst()
+                        .matches(
+                                "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}")) {
+            throw new RequestValidationException(
+                    "Idempotency-Key", "must be supplied exactly once as a canonical UUID v4");
+        }
+        UUID key = UUID.fromString(keys.getFirst());
         Set<String> serialNumbers = new HashSet<>();
         List<ViolationResponse> violations = new ArrayList<>();
         for (int index = 0; index < request.size(); index++) {
@@ -330,10 +417,19 @@ public class InventoryController {
         if (!violations.isEmpty()) {
             throw new RequestValidationException(violations);
         }
-        service.transitionStatus(request.stream()
-                .map(item -> new InventoryStatusTransition(item.serialNumber(), item.status()))
-                .toList());
-        return ResponseEntity.noContent().build();
+        IdempotentStatusTransitionService.Result result = transitions.transition(
+                key,
+                request.stream()
+                        .map(item -> new InventoryStatusTransition(item.serialNumber(), item.status()))
+                        .toList());
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(
+                        result.outcome().status())
+                .header("Idempotency-Replayed", Boolean.toString(result.replayed()))
+                .header("Idempotency-Key-Expires-At", result.expiresAt().toString());
+        if (result.outcome().status() == 204) {
+            return response.build();
+        }
+        return response.contentType(MediaType.APPLICATION_PROBLEM_JSON).body(converter.toResponse(result.outcome()));
     }
 
     @Operation(operationId = "deleteInventoryItem", summary = "Permanently delete an inventory item")

@@ -210,6 +210,7 @@ class InventoryIT extends PostgresIntegrationTest {
         Instant before = Instant.now();
 
         ResultActions response = mockMvc.perform(patch("/api/v1/inventory/status")
+                .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(statusUpdateRequest("DRILL-001", target)));
 
@@ -252,6 +253,9 @@ class InventoryIT extends PostgresIntegrationTest {
                 List.of("[{\"serialNumber\":\"DRILL-001\"}]", "[{\"serialNumber\":\"DRILL-001\",\"status\":null}]")) {
             expectValidation(
                             mockMvc.perform(patch("/api/v1/inventory/status")
+                                    .header(
+                                            "Idempotency-Key",
+                                            java.util.UUID.randomUUID().toString())
                                     .contentType(MediaType.APPLICATION_JSON)
                                     .content(body)),
                             "/api/v1/inventory/status")
@@ -259,12 +263,16 @@ class InventoryIT extends PostgresIntegrationTest {
         }
         expectValidation(
                         mockMvc.perform(patch("/api/v1/inventory/status")
+                                .header(
+                                        "Idempotency-Key",
+                                        java.util.UUID.randomUUID().toString())
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content("[{\"serialNumber\":\"DRILL-001\",\"status\":\"UNKNOWN\"}]")),
                         "/api/v1/inventory/status")
                 .andExpect(jsonPath("$.violations[0].field").value("status"));
         expectProblem(
                 mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("[{\"serialNumber\":\"DRILL-001\",\"status\":\"RESERVED\",\"extra\":true}]")),
                 HttpStatus.BAD_REQUEST,
@@ -275,6 +283,7 @@ class InventoryIT extends PostgresIntegrationTest {
                 "MALFORMED_JSON");
         expectProblem(
                 mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.TEXT_PLAIN)
                         .content("RESERVED")),
                 HttpStatus.UNSUPPORTED_MEDIA_TYPE,
@@ -284,6 +293,7 @@ class InventoryIT extends PostgresIntegrationTest {
                 "/api/v1/inventory/status",
                 "UNSUPPORTED_MEDIA_TYPE");
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(statusUpdateRequest("MISSING", InventoryStatus.RESERVED)))
                 .andExpect(status().isNotFound())
@@ -312,6 +322,7 @@ class InventoryIT extends PostgresIntegrationTest {
         repository.saveAndFlush(new InventoryItem("Z-RETIRED", "Drill", "Original", InventoryStatus.RETIRED));
         repository.saveAndFlush(new InventoryItem("S-SAME", "Drill", "Original", InventoryStatus.RESERVED));
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                 [
@@ -347,6 +358,7 @@ class InventoryIT extends PostgresIntegrationTest {
         assertThat(historyRepository.count()).isZero();
 
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                 [{"serialNumber":"Z-MISSING","status":"RESERVED"},
@@ -367,6 +379,7 @@ class InventoryIT extends PostgresIntegrationTest {
     void rejectsBatchInputBeforeEvaluatingLifecycleRules(String body) throws Exception {
         repository.saveAndFlush(new InventoryItem("DRILL-001", "Drill", "Original", InventoryStatus.RETIRED));
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isBadRequest())
@@ -406,6 +419,7 @@ class InventoryIT extends PostgresIntegrationTest {
             entries.add("{\"serialNumber\":\"" + serial + "\",\"status\":\"RENTED\"}");
         }
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("[" + String.join(",", entries) + "]"))
                 .andExpect(status().isBadRequest())
@@ -415,6 +429,7 @@ class InventoryIT extends PostgresIntegrationTest {
         assertThat(historyRepository.count()).isZero();
         Instant before = Instant.now();
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("[" + String.join(",", entries.subList(0, 100)) + "]"))
                 .andExpect(status().isNoContent())
@@ -465,6 +480,9 @@ class InventoryIT extends PostgresIntegrationTest {
         createFailingTrigger("inventory_status_history", "fail_history_insert", "INSERT");
         try {
             mockMvc.perform(patch("/api/v1/inventory/status")
+                            .header(
+                                    "Idempotency-Key",
+                                    java.util.UUID.randomUUID().toString())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(batch))
                     .andExpect(status().isInternalServerError());
@@ -478,6 +496,9 @@ class InventoryIT extends PostgresIntegrationTest {
         createFailingTrigger("inventory_items", "fail_item_update", "UPDATE");
         try {
             mockMvc.perform(patch("/api/v1/inventory/status")
+                            .header(
+                                    "Idempotency-Key",
+                                    java.util.UUID.randomUUID().toString())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(batch))
                     .andExpect(status().isInternalServerError());
@@ -503,6 +524,12 @@ class InventoryIT extends PostgresIntegrationTest {
                         start.await();
                         return mockMvc.perform(
                                         patch("/api/v1/inventory/status")
+                                                .header(
+                                                        "Idempotency-Key",
+                                                        java.util
+                                                                .UUID
+                                                                .randomUUID()
+                                                                .toString())
                                                 .contentType(MediaType.APPLICATION_JSON)
                                                 .content(
                                                         target == InventoryStatus.RESERVED
@@ -741,6 +768,7 @@ class InventoryIT extends PostgresIntegrationTest {
     void keepsDeletedItemHistoryAndDoesNotShadowTheHistorySerialNumber() throws Exception {
         repository.saveAndFlush(new InventoryItem("DRILL-AUDIT", "Drill", "Audit", InventoryStatus.AVAILABLE));
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(statusUpdateRequest("DRILL-AUDIT", InventoryStatus.RESERVED)))
                 .andExpect(status().isNoContent());
@@ -1038,6 +1066,7 @@ class InventoryIT extends PostgresIntegrationTest {
                         .content(validationRequest("NOAUTH-001", "RENTED")))
                 .andExpect(status().isOk());
         mockMvc.perform(patch("/api/v1/inventory/status")
+                        .header("Idempotency-Key", java.util.UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(statusUpdateRequest("NOAUTH-001", InventoryStatus.INSPECTION_REQUIRED)))
                 .andExpect(status().isNoContent());

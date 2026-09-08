@@ -116,6 +116,60 @@ class MigrationIT extends PostgresIntegrationTest {
     }
 
     @Test
+    void createsOwnedIdempotencyLedgerWithExpiryIndexAndNoItemForeignKey() {
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM inventory.flyway_schema_history WHERE version = '3' AND success",
+                        Integer.class))
+                .isOne();
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT tableowner FROM pg_tables WHERE schemaname = 'inventory' AND tablename = 'inventory_status_transition_requests'",
+                        String.class))
+                .isEqualTo(INVENTORY_USERNAME);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'inventory_status_transition_requests'",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT indexdef FROM pg_indexes WHERE schemaname = 'inventory' AND indexname = 'idx_inventory_status_transition_requests_expiry'",
+                        String.class))
+                .contains("expires_at, idempotency_key");
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM information_schema.table_constraints WHERE table_schema = 'inventory' AND table_name = 'inventory_status_transition_requests' AND constraint_type = 'FOREIGN KEY'",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbcTemplate.queryForList(
+                        "SELECT column_name || ':' || data_type FROM information_schema.columns WHERE table_schema = 'inventory' AND table_name = 'inventory_status_transition_requests'",
+                        String.class))
+                .containsExactlyInAnyOrder(
+                        "idempotency_key:uuid",
+                        "fingerprint:character varying",
+                        "http_status:integer",
+                        "outcome:jsonb",
+                        "recorded_at:timestamp with time zone",
+                        "expires_at:timestamp with time zone");
+        assertThat(flyway.migrate().migrationsExecuted).isZero();
+    }
+
+    @Test
+    void idempotencyConstraintsRejectInvalidTerminalOutcomes() {
+        for (String invalid : java.util.List.of(
+                "'not-a-hash', 204, '{\"status\":204}'::jsonb, INTERVAL '7 days'",
+                "repeat('a',64), 500, '{\"status\":500}'::jsonb, INTERVAL '7 days'",
+                "repeat('a',64), 204, '{\"status\":404}'::jsonb, INTERVAL '7 days'",
+                "repeat('a',64), 204, '{}'::jsonb, INTERVAL '7 days'",
+                "repeat('a',64), 204, '{\"status\":204}'::jsonb, INTERVAL '6 days'")) {
+            assertThatThrownBy(() -> jdbcTemplate.update(
+                            """
+                    INSERT INTO inventory.inventory_status_transition_requests
+                    SELECT gen_random_uuid(), candidate.fingerprint, candidate.status, candidate.outcome,
+                        statement_timestamp(), statement_timestamp() + candidate.retention
+                    FROM (VALUES (
+                    """ + invalid + ")) AS candidate(fingerprint, status, outcome, retention)"))
+                    .isInstanceOf(DataIntegrityViolationException.class);
+        }
+    }
+
+    @Test
     void createsTheHistoryTableWithDatabaseGeneratedValuesAndNoItemForeignKey() {
         Map<String, Object> row = jdbcTemplate.queryForMap("""
                 INSERT INTO inventory.inventory_status_history (serial_number, status_from, status_to)

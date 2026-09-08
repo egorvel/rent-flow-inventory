@@ -1,6 +1,6 @@
 # Inventory Status Transition Design
 
-Status: Batch transition implemented and verified locally; changes ready for review.
+Status: Durable idempotency and daily cleanup implemented and verified locally; ready for review.
 
 ## 1. Scope and architecture
 
@@ -41,8 +41,9 @@ The new runtime paths follow the existing layer direction:
 
 ```text
 PATCH request
-  -> InventoryController
-  -> InventoryService
+  -> InventoryController (validate header and batch)
+  -> IdempotentStatusTransitionService (lock key, replay or execute, persist outcome)
+  -> InventoryService (new attempts only)
   -> InventoryRepository (all items locked in serial-number order)
   -> InventoryStatusHistoryRepository (one insert per item)
 
@@ -81,20 +82,23 @@ existing strict Jackson configuration. Duplicate serials are rejected, even when
 Input validation completes before invoking the service; errors use §5.2.
 
 The controller maps each DTO to an `InventoryStatusTransition` model record and passes the list to
-`InventoryService.transitionStatus`. This keeps service dependencies within the existing layers.
-A successful batch returns `ResponseEntity.noContent().build()` with no content or `Content-Type`.
+`IdempotentStatusTransitionService.transition` with the validated UUID key. It replays or invokes
+`InventoryService.transitionStatus` within its transaction. See §9.1–§9.3 for the required header and retry precedence.
+A successful batch returns `204` with no content or `Content-Type` and the replay/expiry headers from §9.3.
 
 | Result | Status | Body |
 | --- | --- | --- |
 | Every transition and history record committed | `204 No Content` | Empty |
-| Invalid body, batch size, or duplicate serial | `400 Bad Request` | Existing Problem Details with input errors only |
+| Invalid key, body, batch size, or duplicate serial | `400 Bad Request` | Existing Problem Details with input errors only |
 | All failed entries are missing items | `404 Not Found` | Batch Problem Details with `failedItems` |
 | Any same-status or disallowed transition, including mixed missing items | `409 Conflict` | Batch Problem Details with `failedItems` |
 | Response representation unacceptable | `406 Not Acceptable` | Existing Problem Details |
 | Request media type unsupported | `415 Unsupported Media Type` | Existing Problem Details |
+| Key execution lock unavailable | `409 Conflict` | `IDEMPOTENCY_IN_PROGRESS` and `Retry-After: 1` |
+| Completed unexpired key reused with different payload | `422 Unprocessable Content` | `IDEMPOTENCY_KEY_REUSED` |
 | Unexpected failure | `500 Internal Server Error` | Existing sanitized Problem Details |
 
-A one-element array uses the same batch contract. The stable operation ID remains
+These lifecycle results apply to new attempts; unexpired equivalent retries replay before lifecycle evaluation (§9.2). A one-element array uses the same batch contract. The stable operation ID remains
 `transitionInventoryStatus`. The removed single-item route has no PATCH operation. `GET`, `PUT`,
 and `DELETE /api/v1/inventory/status` still address an item whose serial is literally `status`.
 
@@ -229,7 +233,7 @@ contract.
 ### 3.3 Transition transaction and locking
 
 `InventoryService.transitionStatus(List<InventoryStatusTransition> transitions)` is
-`@Transactional` and performs these steps in order:
+`@Transactional`, joins the outer idempotency transaction for new attempts, and performs these steps in order:
 
 1. Sort distinct serial numbers in Java natural ascending order and load each through the existing
    `InventoryRepository.findForUpdateBySerialNumber` pessimistic write lookup. Retain all acquired
@@ -237,16 +241,14 @@ contract.
 2. Iterate entries in original request order. Collect a failure for each missing row or each
    `!item.getStatus().canTransitionTo(target)` result, including same-status requests. Capture the
    request index, serial, requested status, stable code, and deterministic message.
-3. If failures exist, throw `InventoryStatusTransitionBatchException` containing an immutable list
-   of all failures; no item is changed and no history is saved.
+3. If failures exist, return an immutable outcome containing all failures; no item is changed and no history is saved.
 4. Otherwise iterate the original requests, capture each locked item's `statusFrom`, change only
    its status, and persist one `InventoryStatusHistory(serialNumber, statusFrom, target)`.
-5. Commit all item updates and history inserts in the same transaction. Failure in any write,
+5. Return success to the idempotency service, which flushes and saves the outcome before committing all item updates, history inserts and the ledger in the same transaction. Failure in any write,
    flush, or commit rolls back the whole batch, including earlier history inserts.
 
 The controller owns HTTP input validation; the service accepts validated, unique entries. The
-service-layer exception holds failure records without depending on DTOs. `ApiExceptionHandler`
-maps those records to the batch response described in §5.1. There is no partial-success mode.
+model outcome holds failure records without depending on DTOs. The controller maps the committed outcome to the batch response described in §5.1. There is no partial-success mode.
 
 Consistent lock order makes overlapping batches serialize regardless of request order. A waiting
 batch validates against newly committed statuses after acquiring the locks. Missing rows cannot
@@ -376,7 +378,7 @@ migration.
 
 ### 5.1 Batch transition problems
 
-`ApiExceptionHandler` maps `InventoryStatusTransitionBatchException` to a
+The controller maps the committed model outcome to a
 `InventoryStatusTransitionProblemResponse` with RFC 9457 fields and required `failedItems`.
 If any entry has `INVALID_INVENTORY_STATUS_TRANSITION`, the top-level status/type/title/code remain
 `409`, `urn:rentflow:problem:invalid-inventory-status-transition`, `Invalid inventory status
@@ -439,11 +441,12 @@ All additions use the existing prescribed packages:
 | --- | --- |
 | `controller` | Change `InventoryController`, `ApiExceptionHandler`, `RequestValidationException`; retain `InventoryHistoryController` |
 | `dto` | Change `InventoryStatusUpdateDTO`; add `InventoryStatusTransitionProblemResponse`, `InventoryStatusTransitionFailureDTO`; retain `InventoryStatusHistoryDTO` |
-| `converter` | Retain existing converters |
-| `service` | Change `InventoryService`; replace the single-item exception with `InventoryStatusTransitionBatchException`; retain sort enums |
-| `repository` | Reuse existing locked lookup, repositories, and specifications unchanged |
-| `model` | Retain `InventoryStatus`, `InventoryItem`, `InventoryStatusHistory`; add `InventoryStatusTransition` |
-| `resources/db/migration` | Retain existing V2 unchanged; no batch migration |
+| `converter` | Extend `InventoryConverter` with committed outcome mapping; retain the history converter |
+| `service` | Change `InventoryService` to return outcomes; add `IdempotentStatusTransitionService`, `IdempotencyException`, `IdempotencyFingerprint`, `IdempotencyCleanupService` and `IdempotencyCleanupScheduledService`; retain sort enums |
+| `repository` | Add `InventoryStatusTransitionRequestRepository`; reuse existing inventory/history repositories |
+| `model` | Retain existing inventory/history models and command; add `InventoryStatusTransitionOutcome` and `InventoryStatusTransitionRequest` |
+| `resources/db/migration` | Retain V1/V2 unchanged; append V3 for the request ledger |
+| `config` | Add `InventorySchedulingConfig` to enable scheduling |
 
 No dependency, framework, package, folder, global paging customization, event bus, or new service
 layer is introduced. `ArchitectureTest` continues to enforce the same controller-to-service,
@@ -453,7 +456,7 @@ service-to-repository, converter-to-DTO/model, and repository-to-model direction
 
 ### 7.1 Invariants
 
-1. Only a successful dedicated `PATCH` changes all requested statuses and inserts exactly one history
+1. Only a successful new dedicated `PATCH` attempt changes all requested statuses and inserts exactly one history
    row per entry in the same transaction; failure leaves the entire batch unchanged.
 2. Every history row has a valid serial, two defined statuses, different source and target values,
    and a PostgreSQL-authored timestamp.
@@ -464,6 +467,8 @@ service-to-repository, converter-to-DTO/model, and repository-to-model direction
 7. Every history page has a deterministic primary order plus identity tie-breaker.
 
 ### 7.2 Edge-case outcomes
+
+Lifecycle cases below describe new attempts; §9.2 governs replay and contention first.
 
 | Case | Result |
 | --- | --- |
@@ -543,7 +548,35 @@ cycle, and dependency rules.
 
 The final implementation task runs `mvn -B -ntp clean verify` and must finish with `BUILD SUCCESS`.
 
-## 9. Requirements traceability
+## 9. Durable idempotency amendment
+
+### 9.1 Request identity and validation
+
+AC6.1, AC6.4, AC6.6: `PATCH /api/v1/inventory/status` requires exactly one plain canonical 36-character UUID v4 `Idempotency-Key`; either hex case is accepted and parsed to UUID. Missing, repeated, malformed, or non-v4 keys return `400 VALIDATION_FAILED` with field `Idempotency-Key`. Input validation, including duplicates and the 100-entry bound, completes before any ledger access. Keys are global across callers for this endpoint only.
+
+SHA-256 fingerprints a versioned UTF-8 sequence of length-prefixed validated serial/status strings in array order. JSON whitespace/property order do not matter; serial case, requested status and array order do. No raw body or key is added to routine request logs or metric labels.
+
+### 9.2 Transaction and replay
+
+AC6.2–AC6.5, AC6.8: A transactional idempotency service obtains `pg_try_advisory_xact_lock` using the signed first eight SHA-256 bytes of an endpoint namespace plus canonical UUID. The full UUID remains the primary key; a hash collision can only cause temporary false contention. Lock failure immediately returns `409 IDEMPOTENCY_IN_PROGRESS` with `Retry-After: 1` before payload comparison. No durable pending record exists.
+
+After the advisory lock, lock the exact ledger row for update and compare expiry to database `clock_timestamp()`. Unexpired matching records replay without accessing inventory; mismatches return `422 IDEMPOTENCY_KEY_REUSED`. Expired rows are treated as new before comparing fingerprints and replaced under the row lock. Lifecycle outcomes are returned inside the transaction rather than thrown, allowing rejected outcomes to commit. New attempts use §3.3 sorted inventory locks and validate the whole batch before writing. Flush all inventory/history writes, capture database completion time, then persist the terminal outcome in the same transaction. Any write/commit failure rolls back inventory, history and the new ledger outcome together.
+
+### 9.3 Persistence and response contract
+
+AC6.2, AC6.3, AC6.7, AC6.9: Append V3 creating `inventory.inventory_status_transition_requests`: UUID primary key, SHA-256 fingerprint, terminal HTTP status constrained to 204/404/409, JSONB immutable outcome snapshot, recorded-at and expires-at timestamps, and expiry index. There is no item foreign key. Use JPA/Hibernate JSON mapping and model records to preserve layer boundaries. Snapshot every original problem field and failure message; 204 has no HTTP body. JSON property order and dynamic transport headers need not be byte identical.
+
+Terminal responses carry `Idempotency-Replayed: true|false` and `Idempotency-Key-Expires-At` as a UTC instant. Expiry is exactly seven days after database-recorded completion; replays never extend it. Saved lifecycle failures remain unchanged even if items later change. A new business attempt requires a new key. Input failures and rolled-back unexpected errors are not saved; unexpected errors retain sanitized 500 responses.
+
+README and OpenAPI describe all headers and errors. Clients generate a UUID per intent, retry uncertain outcomes with the same key and payload, use exponential backoff with jitter and honor Retry-After. Beyond seven days reconcile an uncertain result before retrying. Deploy V3 before coordinated API cutover; update callers and drain old service instances because mixed versions cannot guarantee replay.
+
+### 9.4 Daily cleanup and observability
+
+AC7.1–AC7.4: Schedule once daily at 03:00 UTC with configurable cron (`inventory.idempotency.cleanup.cron`). Each separate transaction deletes at most 1000 expired records through a CTE selecting keys ordered by expiry with `FOR UPDATE SKIP LOCKED`. Continue after full chunks only while the configurable 60-second runtime budget remains; an already-running chunk may finish after that budget. Row locks coordinate cleanup with request reuse; multiple instances can safely run cleanup concurrently. Cleanup failure ends that run and is counted/logged without request identifiers.
+
+Expiry is checked on every request, so cleanup delays do not extend the guarantee. Daily cleanup can leave expired rows for roughly another day, or longer during backlog/failure. Keep history untouched. Expose bounded-label attempt/replay/mismatch/busy counters, deleted records, cleanup failures/duration and last observed expired backlog (initially zero, refreshed after successful cleanup). Attempt counters count executions started, including later rollbacks. No Redis, generic interceptor, or separate committed in-progress transaction is introduced.
+
+## 10. Requirements traceability
 
 | Acceptance criteria | Design coverage |
 | --- | --- |
@@ -567,5 +600,10 @@ The final implementation task runs `mvn -B -ntp clean verify` and must finish wi
 | AC5.2 | §5.2 |
 | AC5.3-AC5.4 | §2.1-§2.4 |
 
+| AC6.1, AC6.4, AC6.6 | §9.1–§9.2 |
+| AC6.2–AC6.3, AC6.5, AC6.8 | §9.2–§9.3 |
+| AC6.7, AC6.9 | §9.3 |
+| AC7.1–AC7.4 | §9.4 |
+
 Every acceptance criterion has a concrete HTTP, domain, persistence, error, documentation, or
-verification design surface. Task-level traceability is recorded in `tasks.md`, with T5 covering the batch amendment.
+verification design surface. Task-level traceability is recorded in `tasks.md`, with T5 covering the batch amendment and T6–T7 covering idempotency.

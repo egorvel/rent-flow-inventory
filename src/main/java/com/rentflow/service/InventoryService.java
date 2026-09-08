@@ -16,6 +16,7 @@ import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.model.InventoryStatusHistory;
 import com.rentflow.model.InventoryStatusTransition;
+import com.rentflow.model.InventoryStatusTransitionOutcome;
 import com.rentflow.repository.InventoryRepository;
 import com.rentflow.repository.InventoryStatusHistoryRepository;
 
@@ -65,7 +66,7 @@ public class InventoryService {
     }
 
     @Transactional
-    public void transitionStatus(List<InventoryStatusTransition> transitions) {
+    public InventoryStatusTransitionOutcome transitionStatus(List<InventoryStatusTransition> transitions) {
         Map<String, InventoryItem> items = new HashMap<>();
         List<String> serialNumbers = transitions.stream()
                 .map(InventoryStatusTransition::serialNumber)
@@ -76,20 +77,20 @@ public class InventoryService {
             repository.findForUpdateBySerialNumber(serialNumber).ifPresent(item -> items.put(serialNumber, item));
         }
 
-        List<InventoryStatusTransitionBatchException.Failure> failures = new ArrayList<>();
+        List<InventoryStatusTransitionOutcome.Failure> failures = new ArrayList<>();
         for (int index = 0; index < transitions.size(); index++) {
             InventoryStatusTransition transition = transitions.get(index);
             String serialNumber = transition.serialNumber();
             InventoryItem item = items.get(serialNumber);
             if (item == null) {
-                failures.add(new InventoryStatusTransitionBatchException.Failure(
+                failures.add(new InventoryStatusTransitionOutcome.Failure(
                         index,
                         serialNumber,
                         transition.status(),
                         "INVENTORY_ITEM_NOT_FOUND",
                         "Inventory item '" + serialNumber + "' was not found."));
             } else if (!item.getStatus().canTransitionTo(transition.status())) {
-                failures.add(new InventoryStatusTransitionBatchException.Failure(
+                failures.add(new InventoryStatusTransitionOutcome.Failure(
                         index,
                         serialNumber,
                         transition.status(),
@@ -99,7 +100,7 @@ public class InventoryService {
             }
         }
         if (!failures.isEmpty()) {
-            throw new InventoryStatusTransitionBatchException(failures);
+            return InventoryStatusTransitionOutcome.rejected(failures);
         }
 
         for (InventoryStatusTransition transition : transitions) {
@@ -109,6 +110,7 @@ public class InventoryService {
             historyRepository.save(
                     new InventoryStatusHistory(transition.serialNumber(), statusFrom, transition.status()));
         }
+        return InventoryStatusTransitionOutcome.success();
     }
 
     @Transactional(readOnly = true)

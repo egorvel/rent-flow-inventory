@@ -200,11 +200,14 @@ array of 1–100 objects with unique, case-sensitive serial numbers. Each entry 
 target status. Success returns `204 No Content`, changes only statuses, and creates one history
 record per item. All item changes and history records commit together.
 
+Generate a UUID v4 once per business attempt and keep it for every retry of that attempt.
 This one-item batch transitions the item created above from `AVAILABLE` to `RESERVED`:
 
 ```bash
+transition_key=$(cat /proc/sys/kernel/random/uuid)
 curl --fail-with-body \
   --request PATCH \
+  --header "Idempotency-Key: $transition_key" \
   --output /dev/null \
   --write-out '%{http_code}\n' \
   'http://localhost:8080/api/v1/inventory/status' \
@@ -216,8 +219,10 @@ A disallowed transition from `RESERVED` to `RETIRED` rejects the entire batch. T
 includes a missing item, so both failures are reported:
 
 ```bash
+transition_key=$(cat /proc/sys/kernel/random/uuid)
 curl --include \
   --request PATCH \
+  --header "Idempotency-Key: $transition_key" \
   'http://localhost:8080/api/v1/inventory/status' \
   --header 'Content-Type: application/json' \
   --data '[
@@ -253,6 +258,45 @@ Otherwise valid entries also remain unchanged when a batch fails. Same-status re
 forbidden. Invalid input, including empty/oversized arrays, null entries, and duplicate serials,
 returns `400` before lifecycle evaluation, with input errors only. The former
 `PATCH /api/v1/inventory/{serialNumber}/status` endpoint is removed; no API version is added.
+
+The required `Idempotency-Key` is one plain, canonical 36-character UUID v4 (either hex case),
+scoped globally to this endpoint. Missing, repeated or invalid keys return `400 VALIDATION_FAILED`.
+Input validation finishes before checking the key. Equivalent payloads ignore JSON whitespace and
+property order, but preserve array order, serial-number case and requested status.
+
+| Retry condition | Response |
+| --- | --- |
+| Same unexpired key and payload | Original `204`, `404` or `409`, with no inventory evaluation or new history |
+| Same completed key, different valid payload | `422 IDEMPOTENCY_KEY_REUSED` |
+| Key currently executing | Immediate `409 IDEMPOTENCY_IN_PROGRESS`, `Retry-After: 1` |
+| Expired key | New attempt, even if cleanup has not removed the old row |
+
+Completed outcomes include `Idempotency-Replayed: true|false` and
+`Idempotency-Key-Expires-At: <UTC instant>`. The guarantee lasts **seven days from database-recorded
+completion**; replay never extends expiry. Saved lifecycle errors also replay after inventory changes;
+use a new key for a new business attempt. A same-status target is still rejected on new attempts.
+Validation failures and rolled-back server errors do not consume the key.
+
+For network failures, uncertain responses or retryable server errors, retry the same key and payload
+with exponential backoff and jitter, honoring `Retry-After`. Keep the original key instead of rerunning
+the UUID-generation line. Beyond seven days, reconcile an uncertain outcome before retrying: replay
+is no longer guaranteed. JSON property ordering and transport headers may differ on replay, but the
+original status and problem fields are preserved.
+
+Cleanup runs **daily at 03:00 UTC**, configured by `inventory.idempotency.cleanup.cron`
+(default `0 0 3 * * *`). It deletes up to 1000 expired request records per transaction, skips locked
+rows and continues full chunks within `inventory.idempotency.cleanup.runtime-budget` (default `60s`).
+An already-running chunk may finish after that budget. Expiry is enforced on each request; retained
+expired rows do not extend the guarantee. History is never cleaned by this job.
+
+Metrics: `inventory.idempotency.requests` has bounded `outcome` values `attempt`, `replay`, `mismatch`
+and `busy`; cleanup exposes `inventory.idempotency.cleanup.deleted`, `.failures`, `.duration` and
+`.expired.backlog` (last successful run's count, initially zero). Attempts count executions started,
+including those that later roll back. Monitor failures/backlog if cleanup falls behind. No key or
+serial-number metric labels are used.
+
+Deploy migration V3 before the coordinated endpoint cutover, update callers to send keys and drain
+old instances. Mixed old/new application versions cannot provide the replay guarantee.
 
 Browse status history using the defaults `page=0`, `size=20`, `sort=timestamp`, and
 `direction=desc`:
