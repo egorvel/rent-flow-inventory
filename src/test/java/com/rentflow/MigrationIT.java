@@ -23,6 +23,7 @@ import com.rentflow.model.InventoryStatus;
 import com.rentflow.model.InventoryStatusHistory;
 import com.rentflow.repository.InventoryRepository;
 import com.rentflow.repository.InventoryStatusHistoryRepository;
+import com.rentflow.repository.ReservationCancellationInboxRepository;
 import com.rentflow.support.PostgresIntegrationTest;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -41,10 +42,14 @@ class MigrationIT extends PostgresIntegrationTest {
     private InventoryStatusHistoryRepository historyRepository;
 
     @Autowired
+    private ReservationCancellationInboxRepository cancellationInboxRepository;
+
+    @Autowired
     private Flyway flyway;
 
     @BeforeEach
     void clearOwnedTables() {
+        cancellationInboxRepository.deleteAllInBatch();
         historyRepository.deleteAllInBatch();
         repository.deleteAllInBatch();
     }
@@ -148,6 +153,64 @@ class MigrationIT extends PostgresIntegrationTest {
                         "recorded_at:timestamp with time zone",
                         "expires_at:timestamp with time zone");
         assertThat(flyway.migrate().migrationsExecuted).isZero();
+    }
+
+    @Test
+    void createsTheImmutableReservationCancellationInboxInTheInventorySchema() {
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM inventory.flyway_schema_history WHERE version = '4' AND success",
+                        Integer.class))
+                .isOne();
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT tableowner FROM pg_tables WHERE schemaname = 'inventory' AND tablename = 'inventory_reservation_cancellation_inbox'",
+                        String.class))
+                .isEqualTo(INVENTORY_USERNAME);
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'inventory_reservation_cancellation_inbox'",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbcTemplate.queryForList(
+                        "SELECT column_name || ':' || data_type FROM information_schema.columns WHERE table_schema = 'inventory' AND table_name = 'inventory_reservation_cancellation_inbox'",
+                        String.class))
+                .containsExactlyInAnyOrder(
+                        "event_id:uuid",
+                        "fingerprint:character varying",
+                        "serial_number:character varying",
+                        "occurred_at:timestamp with time zone",
+                        "outcome:character varying",
+                        "processed_at:timestamp with time zone");
+        assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM information_schema.table_constraints WHERE table_schema = 'inventory' AND table_name = 'inventory_reservation_cancellation_inbox' AND constraint_type = 'FOREIGN KEY'",
+                        Integer.class))
+                .isZero();
+        assertThat(jdbcTemplate.queryForList(
+                        "SELECT indexname FROM pg_indexes WHERE schemaname = 'inventory' AND tablename = 'inventory_reservation_cancellation_inbox'",
+                        String.class))
+                .containsExactly("inventory_reservation_cancellation_inbox_pkey");
+        assertThat(flyway.migrate().migrationsExecuted).isZero();
+    }
+
+    @Test
+    void reservationCancellationInboxEnforcesItsBoundedContractAndGeneratesProcessingTime() {
+        Map<String, Object> row = jdbcTemplate.queryForMap("""
+                INSERT INTO inventory.inventory_reservation_cancellation_inbox
+                    (event_id, fingerprint, serial_number, occurred_at, outcome)
+                VALUES (gen_random_uuid(), repeat('a', 64), 'DRILL-001', statement_timestamp(), 'RELEASED')
+                RETURNING processed_at
+                """);
+        assertThat(row.get("processed_at")).isNotNull();
+
+        for (String values : java.util.List.of(
+                "gen_random_uuid(), 'bad', 'DRILL-001', statement_timestamp(), 'RELEASED'",
+                "gen_random_uuid(), repeat('a', 64), '/INVALID', statement_timestamp(), 'RELEASED'",
+                "gen_random_uuid(), repeat('a', 64), 'DRILL-001', statement_timestamp(), 'UNKNOWN'")) {
+            assertThatThrownBy(() -> jdbcTemplate.update("""
+                            INSERT INTO inventory.inventory_reservation_cancellation_inbox
+                                (event_id, fingerprint, serial_number, occurred_at, outcome)
+                            VALUES (
+                            """ + values + ")"))
+                    .isInstanceOf(DataIntegrityViolationException.class);
+        }
     }
 
     @Test
@@ -297,6 +360,7 @@ class MigrationIT extends PostgresIntegrationTest {
         properties.put("spring.datasource.password", INVENTORY_PASSWORD);
         properties.put("spring.main.banner-mode", "off");
         properties.put("logging.level.root", "OFF");
+        properties.put("spring.kafka.listener.auto-startup", "false");
         properties.putAll(overrides);
         String[] arguments = properties.entrySet().stream()
                 .map(entry -> "--" + entry.getKey() + "=" + entry.getValue())

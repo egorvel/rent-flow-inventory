@@ -13,22 +13,34 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.rentflow.model.InventoryItem;
+import com.rentflow.model.InventoryReservationCancellationOutcome;
+import com.rentflow.model.InventoryReservationCancellationReceipt;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.model.InventoryStatusHistory;
 import com.rentflow.model.InventoryStatusTransition;
 import com.rentflow.model.InventoryStatusTransitionOutcome;
+import com.rentflow.model.ReservationCancellationEvent;
+import com.rentflow.model.ReservationCancellationFailureCode;
+import com.rentflow.model.ReservationCancellationProcessingOutcome;
+import com.rentflow.model.ReservationCancellationRejectedException;
 import com.rentflow.repository.InventoryRepository;
 import com.rentflow.repository.InventoryStatusHistoryRepository;
+import com.rentflow.repository.ReservationCancellationInboxRepository;
 
 @Service
 public class InventoryService {
 
     private final InventoryRepository repository;
     private final InventoryStatusHistoryRepository historyRepository;
+    private final ReservationCancellationInboxRepository cancellationInboxRepository;
 
-    public InventoryService(InventoryRepository repository, InventoryStatusHistoryRepository historyRepository) {
+    public InventoryService(
+            InventoryRepository repository,
+            InventoryStatusHistoryRepository historyRepository,
+            ReservationCancellationInboxRepository cancellationInboxRepository) {
         this.repository = repository;
         this.historyRepository = historyRepository;
+        this.cancellationInboxRepository = cancellationInboxRepository;
     }
 
     @Transactional
@@ -111,6 +123,46 @@ public class InventoryService {
                     new InventoryStatusHistory(transition.serialNumber(), statusFrom, transition.status()));
         }
         return InventoryStatusTransitionOutcome.success();
+    }
+
+    @Transactional
+    public ReservationCancellationProcessingOutcome releaseAfterCancellation(ReservationCancellationEvent event) {
+        cancellationInboxRepository.acquireEventLock(event.lockId());
+        InventoryReservationCancellationReceipt receipt =
+                cancellationInboxRepository.findById(event.eventId()).orElse(null);
+        if (receipt != null) {
+            if (receipt.getFingerprint().equals(event.fingerprint())) {
+                return ReservationCancellationProcessingOutcome.DUPLICATE;
+            }
+            throw new ReservationCancellationRejectedException(
+                    ReservationCancellationFailureCode.EVENT_ID_REUSED, event.eventId());
+        }
+
+        InventoryItem item = repository
+                .findForUpdateBySerialNumber(event.serialNumber())
+                .orElseThrow(() -> new ReservationCancellationRejectedException(
+                        ReservationCancellationFailureCode.INVENTORY_ITEM_NOT_FOUND, event.eventId()));
+
+        InventoryReservationCancellationOutcome receiptOutcome;
+        ReservationCancellationProcessingOutcome processingOutcome;
+        if (item.getStatus() == InventoryStatus.RESERVED) {
+            item.setStatus(InventoryStatus.AVAILABLE);
+            historyRepository.save(new InventoryStatusHistory(
+                    event.serialNumber(), InventoryStatus.RESERVED, InventoryStatus.AVAILABLE));
+            receiptOutcome = InventoryReservationCancellationOutcome.RELEASED;
+            processingOutcome = ReservationCancellationProcessingOutcome.RELEASED;
+        } else if (item.getStatus() == InventoryStatus.AVAILABLE) {
+            receiptOutcome = InventoryReservationCancellationOutcome.ALREADY_AVAILABLE;
+            processingOutcome = ReservationCancellationProcessingOutcome.ALREADY_AVAILABLE;
+        } else {
+            throw new ReservationCancellationRejectedException(
+                    ReservationCancellationFailureCode.INVALID_INVENTORY_STATUS, event.eventId());
+        }
+
+        cancellationInboxRepository.save(new InventoryReservationCancellationReceipt(
+                event.eventId(), event.fingerprint(), event.serialNumber(), event.occurredAt(), receiptOutcome));
+        cancellationInboxRepository.flush();
+        return processingOutcome;
     }
 
     @Transactional(readOnly = true)

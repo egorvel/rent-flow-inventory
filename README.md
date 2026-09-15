@@ -14,14 +14,14 @@ separately browsable status-history collection.
 ## Prerequisites
 
 - Java 25.
-- Docker Engine with the Docker Compose plugin. Docker is required for the PostgreSQL 18.4 local
-  stack and for Testcontainers during integration tests.
+- Docker Engine with the Docker Compose plugin. Docker is required for the PostgreSQL 18.4 and
+  Apache Kafka 4.3.1 local stack and for Testcontainers during integration tests.
 - `curl` for the examples and container smoke test.
 - Maven 3.9.x is optional because the repository includes Maven Wrapper 3.3.4, pinned to Maven
   3.9.16.
 
-Ports `8080` and `5432` must be available for the default local stack. Set `POSTGRES_PORT` before
-starting Compose when the host PostgreSQL port needs to differ.
+Ports `8080`, `5432`, and `9092` must be available for the default local stack. Set
+`POSTGRES_PORT` or `KAFKA_PORT` before starting Compose when a host port needs to differ.
 
 ## Build
 
@@ -129,11 +129,99 @@ environment variables at runtime:
 | `SPRING_DATASOURCE_USERNAME` | Yes | Inventory-owned database login role |
 | `SPRING_DATASOURCE_PASSWORD` | Yes | Secret for the Inventory-owned database login role |
 | `SERVER_PORT` | No | HTTP port; defaults to `8080` |
+| `KAFKA_BOOTSTRAP_SERVERS` | No | Kafka brokers; defaults to `localhost:9092` |
+| `INVENTORY_CANCELLATION_TOPIC` | No | Source topic; defaults to `rentflow.reservation.cancelled.v1` |
+| `INVENTORY_CANCELLATION_DLT` | No | DLT; defaults to `rentflow.inventory.reservation-cancellation.dlt.v1` |
+| `INVENTORY_CANCELLATION_GROUP_ID` | No | Consumer group; defaults to `rentflow.inventory.reservation-cancellation.v1` |
+| `INVENTORY_CANCELLATION_CONCURRENCY` | No | Listener concurrency; defaults to `3` |
+| `INVENTORY_CANCELLATION_MAX_PAYLOAD_BYTES` | No | Maximum event value size; defaults to `4096` |
+| `INVENTORY_CANCELLATION_MAX_ATTEMPTS` | No | Total processing attempts; defaults to `5` |
+| `INVENTORY_CANCELLATION_INITIAL_BACKOFF` | No | First retry delay; defaults to `1s` |
+| `INVENTORY_CANCELLATION_BACKOFF_MULTIPLIER` | No | Retry-delay multiplier; defaults to `2` |
+| `INVENTORY_CANCELLATION_MAX_BACKOFF` | No | Maximum retry delay; defaults to `8s` |
 | `JAVA_TOOL_OPTIONS` | No | JVM runtime options |
 
 The local Compose bootstrap can be overridden with `POSTGRES_DB`, `POSTGRES_USER`,
 `POSTGRES_PASSWORD`, `INVENTORY_DB_USER`, `INVENTORY_DB_PASSWORD`, and `POSTGRES_PORT`. Compose
 publishes PostgreSQL only on the host loopback interface.
+
+## Asynchronous Reservation Cancellation
+
+Inventory consumes the past-tense `ReservationCancelled` event because Reservation owns the fact
+that a reservation was cancelled, while Inventory owns the resulting equipment lifecycle rule.
+This is intentionally eventually consistent: Reservation does not wait for Inventory, and an
+item can remain `RESERVED` briefly after cancellation.
+
+The version-1 source record is a UTF-8 JSON object no larger than 4096 bytes:
+
+```json
+{
+  "eventId": "d880f919-2b5c-4f7e-a56d-e047e7d932a6",
+  "eventType": "ReservationCancelled",
+  "eventVersion": 1,
+  "occurredAt": "2026-09-15T15:30:00Z",
+  "serialNumber": "DRILL-001"
+}
+```
+
+The Kafka record key must be the UTF-8 encoding of the exact case-sensitive `serialNumber`.
+Inventory ignores unknown JSON properties but validates all five known fields strictly. The event
+contains no `reservationId`, and Inventory publishes no result event.
+
+The source topic is `rentflow.reservation.cancelled.v1`, with three partitions, delete cleanup,
+and seven-day retention. Inventory uses consumer group
+`rentflow.inventory.reservation-cancellation.v1`. Production targets replication factor three and
+minimum ISR two; the single-node local stack uses replication factor one.
+
+For a new event, an item in `RESERVED` becomes `AVAILABLE` and receives the normal immutable
+status-history row. An item already in `AVAILABLE` is a successful `ALREADY_AVAILABLE` no-op and
+does not receive false same-state history. Inventory stores an inbox receipt indefinitely in the
+same PostgreSQL transaction as the optional item and history writes.
+
+That inbox is needed even though `AVAILABLE` is a safe no-op. Kafka can redeliver an old event
+after the item has become available and then been reserved again; checking only the current state
+would incorrectly release that later reservation. A matching completed `eventId` therefore
+returns `DUPLICATE` without inspecting the item. Because the event has no reservation ownership
+identifier, a delayed *first* delivery after out-of-band reassignment remains a known limitation.
+
+Delivery is at least once, with an effectively-once Inventory database effect rather than a
+distributed transaction. Transient failures receive five total attempts with default delays of
+1, 2, 4, and 8 seconds. Deterministic failures go directly to
+`rentflow.inventory.reservation-cancellation.dlt.v1`; exhausted transient failures use
+`PROCESSING_RETRIES_EXHAUSTED`. The other stable failure codes are `INVALID_EVENT`,
+`UNSUPPORTED_EVENT`, `EVENT_ID_REUSED`, `INVENTORY_ITEM_NOT_FOUND`, and
+`INVALID_INVENTORY_STATUS`.
+
+The DLT has three partitions, delete cleanup, and 30-day retention. It preserves the original key
+and value and adds only these bounded UTF-8 headers: `rentflow.dlt.source-topic`,
+`rentflow.dlt.source-partition`, `rentflow.dlt.source-offset`, `rentflow.dlt.consumer-group`,
+`rentflow.dlt.failure-code`, `rentflow.dlt.failed-at`, and `rentflow.dlt.event-id` when parseable.
+There is no automatic replay. Alert on `dead_letter`, `dead_letter_publish_failure`, and sustained
+consumer lag from `inventory.reservation.cancellation.records{outcome="..."}`; the other bounded
+outcomes are `received`, `released`, `already_available`, `duplicate`, and `retry`.
+
+Automatic topic creation remains disabled. With the common stack running, create the
+Reservation-owned source topic explicitly; Inventory creates only its DLT when the `local` profile
+is active:
+
+```bash
+docker compose exec --no-TTY rentflow-kafka \
+  /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:19092 \
+  --create --if-not-exists \
+  --topic rentflow.reservation.cancelled.v1 \
+  --partitions 3 --replication-factor 1 \
+  --config cleanup.policy=delete \
+  --config retention.ms=604800000
+```
+
+For a guarded manual replay, first diagnose the DLT failure and verify current Reservation and
+Inventory state, especially for missing-item or invalid-status failures. Do not replay an invalid
+or unsupported record unchanged, and investigate `EVENT_ID_REUSED` as a producer defect. When a
+valid replay is safe, republish the original bytes to the source topic with the original
+case-sensitive key and unchanged `eventId`, then confirm the outcome through metrics and Inventory
+history. The seven-day source-retention window means a prolonged outage requires the future
+Reservation outbox to republish before its retained event is lost.
 
 ## Database Migrations
 

@@ -18,6 +18,36 @@ spring:
   sql:
     init:
       mode: never
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${INVENTORY_CANCELLATION_GROUP_ID:rentflow.inventory.reservation-cancellation.v1}
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.ByteArrayDeserializer
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      value-serializer: org.apache.kafka.common.serialization.ByteArraySerializer
+      properties:
+        enable.idempotence: true
+    listener:
+      ack-mode: record
+      concurrency: ${INVENTORY_CANCELLATION_CONCURRENCY:3}
+      missing-topics-fatal: false
+
+inventory:
+  kafka:
+    reservation-cancellation:
+      topic: ${INVENTORY_CANCELLATION_TOPIC:rentflow.reservation.cancelled.v1}
+      dead-letter-topic: ${INVENTORY_CANCELLATION_DLT:rentflow.inventory.reservation-cancellation.dlt.v1}
+      max-payload-bytes: ${INVENTORY_CANCELLATION_MAX_PAYLOAD_BYTES:4096}
+      retry:
+        max-attempts: ${INVENTORY_CANCELLATION_MAX_ATTEMPTS:5}
+        initial-backoff: ${INVENTORY_CANCELLATION_INITIAL_BACKOFF:1s}
+        multiplier: ${INVENTORY_CANCELLATION_BACKOFF_MULTIPLIER:2}
+        max-backoff: ${INVENTORY_CANCELLATION_MAX_BACKOFF:8s}
 
 springdoc:
   paths-to-match: /api/v1/**
