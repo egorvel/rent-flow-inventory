@@ -4,11 +4,9 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
-import java.util.HexFormat;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
@@ -21,6 +19,7 @@ import org.springframework.stereotype.Component;
 import com.rentflow.model.ReservationCancellationEvent;
 import com.rentflow.model.ReservationCancellationFailureCode;
 import com.rentflow.model.ReservationCancellationRejectedException;
+import com.rentflow.util.LengthPrefixedSha256;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.StreamReadFeature;
@@ -183,35 +182,17 @@ public class ReservationCancellationEventConverter {
     }
 
     private static String fingerprint(UUID eventId, Instant occurredAt, String serialNumber, String key) {
-        MessageDigest digest = sha256();
-        add(digest, EVENT_NAMESPACE);
-        add(digest, eventId.toString());
-        add(digest, EVENT_TYPE);
-        add(digest, Integer.toString(EVENT_VERSION));
-        add(digest, occurredAt.toString());
-        add(digest, serialNumber);
-        add(digest, key);
-        return HexFormat.of().formatHex(digest.digest());
+        return LengthPrefixedSha256.hex(List.of(
+                EVENT_NAMESPACE,
+                eventId.toString(),
+                EVENT_TYPE,
+                Integer.toString(EVENT_VERSION),
+                occurredAt.toString(),
+                serialNumber,
+                key));
     }
 
     private static long lockId(UUID eventId) {
-        MessageDigest digest = sha256();
-        add(digest, LOCK_NAMESPACE);
-        add(digest, eventId.toString());
-        return ByteBuffer.wrap(digest.digest()).getLong();
-    }
-
-    private static void add(MessageDigest digest, String value) {
-        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-        digest.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
-        digest.update(bytes);
-    }
-
-    private static MessageDigest sha256() {
-        try {
-            return MessageDigest.getInstance("SHA-256");
-        } catch (NoSuchAlgorithmException exception) {
-            throw new IllegalStateException("SHA-256 is unavailable", exception);
-        }
+        return LengthPrefixedSha256.firstLong(List.of(LOCK_NAMESPACE, eventId.toString()));
     }
 }
