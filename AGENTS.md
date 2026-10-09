@@ -41,6 +41,9 @@ Inventory service. Owns the equipment catalogue.
 - Testcontainers
 
 **Persistence conventions:**
+- For repository queries, prefer Spring Data JPA derived query methods first, use JPQL `@Query`
+  when derivation cannot express the query clearly, and use native SQL only when required for
+  database-specific behavior or semantics that cannot be expressed safely with JPQL.
 - The `rentflow` database, `inventory` login role, and role-owned `inventory` schema are
   platform-provisioned prerequisites; the local Compose bootstrap may provide them for
   development.
