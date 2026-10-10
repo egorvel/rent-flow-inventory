@@ -301,7 +301,10 @@ AC4.1-AC4.4, AC4.6-AC4.7; `design.md` §1.3, §2, §4.1-§4.2, §4.6,
   reaches the same partition in the DLT without a processing retry or database effect. Tests prove
   the source offset advances only after the DLT send is broker-confirmed.
 - Retry configuration tests prove the production sequence is exactly the initial attempt plus
-  1-, 2-, 4-, and 8-second delays. End-to-end retry tests use deterministic short overrides: a
+  1-, 2-, 4-, and 8-second delays per cycle. Tests cover configured attempt limits one through
+  five, zero delay, multiplier one, and retry-cycle resets on exception-type changes and recovery
+  failure. Framework-fatal exceptions produce no retry count or WARN; only an actual non-STOP
+  backoff decision increments `retry`. End-to-end retry tests use deterministic short overrides: a
   controlled transient failure succeeds on a later attempt with one committed effect, while five
   failures produce `PROCESSING_RETRIES_EXHAUSTED` in the DLT.
 - When DLT publication cannot be confirmed, the source offset remains uncommitted,
@@ -316,6 +319,9 @@ AC4.1-AC4.4, AC4.6-AC4.7; `design.md` §1.3, §2, §4.1-§4.2, §4.6,
   bounded source metadata, category, and optional event ID but never the key, value, payload,
   exception message, SQL detail, or credentials. Any separate unexpected-exception stack-trace
   diagnostic also excludes the Kafka key and value.
+- Actual retry, DLT-success, and DLT-failure callbacks serialize correlation and bounded fields
+  through the configured ECS encoder. DLT-failure logs retain safe cause types/frames and omit
+  exception messages and payloads; retry logs use `RETRYABLE_PROCESSING_FAILURE`.
 - The single counter family exposes only `received`, `released`, `already_available`, `duplicate`,
   `retry`, `dead_letter`, and `dead_letter_publish_failure`; no event ID, serial, offset, exception,
   or other unbounded label is registered.
@@ -412,7 +418,8 @@ AC4.1-AC4.4, AC4.6-AC4.7; `design.md` §1.3, §2, §4.1-§4.2, §4.6,
   Inventory database effect, indefinite inbox retention, no `reservationId`, no result event, and
   the stale-first-delivery limitation without claiming distributed or Kafka exactly-once
   processing.
-- Retry documentation lists five total attempts and the 1/2/4/8-second defaults. The DLT section
+- Retry documentation lists five default attempts per cycle, the 1/2/4/8-second defaults, and the
+  cycle resets on exception-type changes and failed DLT publication. The DLT section
   lists every stable failure code and header, 30-day quarantine retention, alert signals, lack of
   automatic replay, and the guarded replay procedure preserving original event ID and key.
 - Local instructions explicitly create the Reservation-owned source topic for development until
@@ -444,7 +451,7 @@ AC4.1-AC4.4, AC4.6-AC4.7; `design.md` §1.3, §2, §4.1-§4.2, §4.6,
 | AC2.5-AC2.6 | T5 group-offset and restart tests prove acknowledgement follows commit and rollback leaves the record eligible. |
 | AC2.7 | T2 proves no expiry/delete mechanism and retained receipts; T7 documents indefinite retention. |
 | AC3.1 | T3 exhaustively rejects the invalid wire matrix; T5 proves original-byte immediate DLT and no database effect. |
-| AC3.2-AC3.4 | T1 fixes validated retry defaults; T5 proves five total attempts, rollback, and exhausted DLT behavior. |
+| AC3.2-AC3.4 | T1 fixes validated retry defaults; T5 proves bounded attempts per cycle, reset behavior, rollback, and exhausted DLT behavior. |
 | AC3.5-AC3.7 | T5 proves byte/header preservation, broker confirmation before offset commit, and recovery after DLT send failure. |
 | AC3.8 | T5 proves there is no DLT listener or scheduled replay; T7 documents manual-only recovery. |
 | AC3.9 | T5 automatically replays original key/value with the same event ID; T7 documents the guarded operator procedure. |

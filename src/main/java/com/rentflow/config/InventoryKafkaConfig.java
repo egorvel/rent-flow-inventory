@@ -2,14 +2,18 @@ package com.rentflow.config;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
@@ -19,25 +23,25 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.kafka.autoconfigure.ConcurrentKafkaListenerContainerFactoryConfigurer;
+import org.springframework.boot.kafka.autoconfigure.DefaultKafkaConsumerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.annotation.EnableKafka;
-import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.TopicBuilder;
-import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.RetryListener;
-import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
+import org.springframework.util.backoff.BackOff;
+import org.springframework.util.backoff.BackOffExecution;
+import org.springframework.util.backoff.ExponentialBackOff;
 
 import com.rentflow.converter.ReservationCancellationEventConverter;
 import com.rentflow.model.ReservationCancellationFailureCode;
 import com.rentflow.model.ReservationCancellationProcessingException;
 import com.rentflow.model.ReservationCancellationRejectedException;
-import com.rentflow.util.KafkaTraceHeaders;
+import com.rentflow.util.KafkaTraceConsumerInterceptor;
 
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -57,17 +61,20 @@ public class InventoryKafkaConfig {
             "rentflow.dlt.event-id");
 
     @Bean
-    ConcurrentKafkaListenerContainerFactory<Object, Object> kafkaListenerContainerFactory(
-            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
-            ConsumerFactory<Object, Object> consumerFactory) {
-        ConcurrentKafkaListenerContainerFactory<Object, Object> factory =
-                new ConcurrentKafkaListenerContainerFactory<>();
-        configurer.configure(factory, consumerFactory);
-        factory.setRecordInterceptor((record, _) -> {
-            KafkaTraceHeaders.normalize(record.headers());
-            return record;
-        });
-        return factory;
+    DefaultKafkaConsumerFactoryCustomizer normalizeKafkaTraceBeforeObservation() {
+        return factory -> {
+            String name = ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG;
+            Object configured = factory.getConfigurationProperties().get(name);
+            List<?> existing = configured == null
+                    ? List.of()
+                    : (List<?>) ConfigDef.parseType(name, configured, ConfigDef.Type.LIST);
+            List<Object> interceptors = new ArrayList<>(existing);
+            String normalizer = KafkaTraceConsumerInterceptor.class.getName();
+            interceptors.removeIf(interceptor ->
+                    normalizer.equals(interceptor) || KafkaTraceConsumerInterceptor.class.equals(interceptor));
+            interceptors.add(normalizer);
+            factory.updateConfigs(Map.of(name, interceptors));
+        };
     }
 
     @Bean
@@ -82,7 +89,8 @@ public class InventoryKafkaConfig {
         recoverer.setFailIfSendResultIsError(true);
 
         ReservationCancellationProperties.Retry retry = properties.retry();
-        ExponentialBackOffWithMaxRetries backOff = new ExponentialBackOffWithMaxRetries(retry.maxAttempts() - 1);
+        ExponentialBackOff backOff = new ExponentialBackOff();
+        backOff.setMaxAttempts(retry.maxAttempts() - 1);
         backOff.setInitialInterval(retry.initialBackoff().toMillis());
         backOff.setMultiplier(retry.multiplier());
         backOff.setMaxInterval(retry.maxBackoff().toMillis());
@@ -90,26 +98,12 @@ public class InventoryKafkaConfig {
         DefaultErrorHandler errorHandler = new DefaultErrorHandler(recoverer, backOff);
         errorHandler.addNotRetryableExceptions(ReservationCancellationRejectedException.class);
         errorHandler.setAckAfterHandle(true);
+        errorHandler.setBackOffFunction(
+                (record, exception) -> observedRetryBackOff(backOff, record, exception, converter, metrics));
         errorHandler.setRetryListeners(new RetryListener() {
             @Override
             public void failedDelivery(ConsumerRecord<?, ?> record, Exception exception, int deliveryAttempt) {
-                if (deliveryAttempt < retry.maxAttempts()
-                        && !hasCause(exception, ReservationCancellationRejectedException.class)) {
-                    count(metrics, "retry");
-                    LOGGER.atWarn()
-                            .addKeyValue("outcome", "retry")
-                            .addKeyValue("sourceTopic", record.topic())
-                            .addKeyValue("partition", record.partition())
-                            .addKeyValue("offset", record.offset())
-                            .addKeyValue("deliveryAttempt", deliveryAttempt)
-                            .addKeyValue("failureCode", "TRANSIENT_PROCESSING_FAILURE")
-                            .addKeyValue(
-                                    "eventId",
-                                    eventId(exception, record.value(), converter)
-                                            .map(UUID::toString)
-                                            .orElse("unavailable"))
-                            .log("Reservation cancellation retry scheduled");
-                }
+                // Retry scheduling is observed only after the backoff decision, not every failure.
             }
 
             @Override
@@ -142,6 +136,7 @@ public class InventoryKafkaConfig {
                                         .map(UUID::toString)
                                         .orElse("unavailable"))
                         .addKeyValue("exceptionType", recoveryFailure.getClass().getName())
+                        .setCause(recoveryFailure)
                         .log("Reservation cancellation DLT publication failed");
             }
         });
@@ -161,6 +156,41 @@ public class InventoryKafkaConfig {
 
     private static void count(MeterRegistry metrics, String outcome) {
         metrics.counter(METRIC_NAME, "outcome", outcome).increment();
+    }
+
+    private static BackOff observedRetryBackOff(
+            BackOff backOff,
+            ConsumerRecord<?, ?> record,
+            Exception exception,
+            ReservationCancellationEventConverter converter,
+            MeterRegistry metrics) {
+        return () -> new BackOffExecution() {
+            private final BackOffExecution delegate = backOff.start();
+            private int deliveryAttempt;
+
+            @Override
+            public long nextBackOff() {
+                long delay = delegate.nextBackOff();
+                if (delay != STOP) {
+                    deliveryAttempt++;
+                    count(metrics, "retry");
+                    LOGGER.atWarn()
+                            .addKeyValue("outcome", "retry")
+                            .addKeyValue("sourceTopic", record.topic())
+                            .addKeyValue("partition", record.partition())
+                            .addKeyValue("offset", record.offset())
+                            .addKeyValue("deliveryAttempt", deliveryAttempt)
+                            .addKeyValue("failureCode", "RETRYABLE_PROCESSING_FAILURE")
+                            .addKeyValue(
+                                    "eventId",
+                                    eventId(exception, record.value(), converter)
+                                            .map(UUID::toString)
+                                            .orElse("unavailable"))
+                            .log("Reservation cancellation retry scheduled");
+                }
+                return delay;
+            }
+        };
     }
 
     private static ReservationCancellationFailureCode failureCode(Throwable exception) {
@@ -188,10 +218,6 @@ public class InventoryKafkaConfig {
             return Optional.of(processing.getEventId());
         }
         return rawValue instanceof byte[] bytes ? converter.extractEventId(bytes) : Optional.empty();
-    }
-
-    private static boolean hasCause(Throwable exception, Class<? extends Throwable> type) {
-        return findCause(exception, type).isPresent();
     }
 
     private static <T extends Throwable> Optional<T> findCause(Throwable exception, Class<T> type) {

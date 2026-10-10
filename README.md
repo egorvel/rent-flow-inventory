@@ -186,9 +186,12 @@ identifier, a delayed *first* delivery after out-of-band reassignment remains a 
 
 Delivery is at least once, with an effectively-once Inventory database effect rather than a
 distributed transaction. Transient failures receive five total attempts with default delays of
-1, 2, 4, and 8 seconds. Deterministic failures go directly to
+1, 2, 4, and 8 seconds per retry cycle. Exception-type changes and failed DLT publication reset
+the cycle, so five attempts is not a lifetime limit for a source record. A configured single
+attempt disables retries; zero backoff allows immediate retries bounded by the configured count.
+Deterministic failures and Spring's standard fatal exceptions go directly to
 `rentflow.inventory.reservation-cancellation.dlt.v1`; exhausted transient failures use
-`PROCESSING_RETRIES_EXHAUSTED`. The other stable failure codes are `INVALID_EVENT`,
+`PROCESSING_RETRIES_EXHAUSTED`, as do framework-fatal failures. The other stable failure codes are `INVALID_EVENT`,
 `UNSUPPORTED_EVENT`, `EVENT_ID_REUSED`, `INVENTORY_ITEM_NOT_FOUND`, and
 `INVALID_INVENTORY_STATUS`.
 
@@ -317,8 +320,11 @@ bodies, SQL text/parameters and unrestricted MDC fields are excluded. SQL error/
 loggers that could print sensitive values are disabled. These logs are diagnostics, not a durable
 audit trail.
 
-Tracing uses validated W3C `traceparent`/`tracestate`, with baggage excluded. Missing or malformed
-headers never reject a cancellation. DLT records retain their exact key/value/partition and
+Tracing uses validated W3C `traceparent`/`tracestate`, with baggage excluded. Kafka headers are
+normalized by a consumer interceptor before Spring creates the listener observation: the last
+header wins, each W3C header is bounded to 512 bytes, and an invalid traceparent starts a new
+trace. Invalid tracestate is discarded. Missing or malformed headers never reject a cancellation.
+DLT records retain their exact key/value/partition and
 diagnostic headers, plus valid tracing context. Retries share the originating trace and DLT
 publication has its own producer span. Reservation must separately preserve context in its
 durable outbox for producer-restart correlation. JDBC spans retain timing and datasource identity

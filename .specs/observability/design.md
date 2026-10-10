@@ -54,11 +54,22 @@ Configure KafkaAdmin with inventory.kafka.cluster-id (default unknown; Common su
 cluster ID), avoiding instrumentation-triggered synchronous cluster discovery.
 
 Preserve received/released/already_available/duplicate/retry/dead_letter/
-dead_letter_publish_failure counters exactly; received is listener invocations, including retry;
+dead_letter_publish_failure counter names and meanings; received is listener invocations, including retry;
 retry means scheduled retry; success counters are incremented after the transactional proxy returns.
 Result INFO logs carry eventId, outcome, sourceTopic, partition and offset. Retry WARN logs carry
 deliveryAttempt and bounded failureCode; recovery ERROR logs include failureCode and eventId when
-parseable. Never log record key/value or serialNumber.
+parseable. Never log record key/value or serialNumber. Attach the DLT publication exception to its
+fixed ERROR message so the existing safe stack printer retains cause types and bounded frames.
+
+Use Spring ExponentialBackOff with an explicit maxAttempts of configured processing attempts minus
+one, retaining the initial interval, multiplier and maximum interval. One processing attempt means
+no retries; zero delays mean immediate retries bounded by that count. Supply a per-record observed
+BackOffExecution through DefaultErrorHandler.setBackOffFunction. Increment retry and emit its WARN
+only when nextBackOff returns a delay rather than STOP, after Spring's fatal classification has
+selected the applicable backoff. Do not infer retry scheduling from RetryListener.failedDelivery.
+deliveryAttempt identifies the failed attempt preceding the scheduled retry within the current
+retry cycle; use the log-only failureCode RETRYABLE_PROCESSING_FAILURE. Retain Spring's retry-state
+resets on exception changes and recovery failure and the existing DLT failure-code contract.
 
 Timer inventory.reservation.cancellation.completion.delay records Duration between occurredAt
 and the application clock immediately after RELEASED or ALREADY_AVAILABLE commit. Duplicates and
@@ -66,11 +77,17 @@ failures do not contribute. Future occurredAt yields a clock_skew WARN and incre
 inventory.reservation.cancellation.clock.skew; it contributes no negative/zero delay sample.
 Use an injectable Clock for deterministic boundary tests. Histograms cover 1ms–7d.
 
-Keep existing diagnostic DLT headers and add valid traceparent/tracestate only. Before tracing
-extraction, normalize W3C headers to one valid bounded context, remove baggage and unsupported
+Keep existing diagnostic DLT headers and add valid traceparent/tracestate only. A stateless Kafka
+ConsumerInterceptor normalizes every polled record before Spring starts listener observations.
+Register it through Boot's DefaultKafkaConsumerFactoryCustomizer, retaining configured interceptors
+and appending the normalizer last exactly once; keep Boot's default listener-container factory.
+Before tracing extraction, normalize W3C headers to one valid context with each header limited to
+512 bytes, using the last header value; remove baggage and unsupported
 propagation headers; invalid context is ignored, never an event rejection. The observed producer
 injects its current span context into the outgoing record. Existing context-free events remain
-processable. DLT partition, bytes, retries, inbox transaction and offset rules do not change.
+processable. DLT partition, bytes, default retry schedule, inbox transaction and offset rules remain
+intact. Regression tests inspect headers at observation start through a real Kafka consumer and
+serialize actual retry/recovery callback events through the configured ECS encoder.
 
 ## 5. Cleanup monitoring
 

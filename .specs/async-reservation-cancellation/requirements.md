@@ -49,7 +49,7 @@ offset becomes eligible for commit only after that transaction succeeds.
 Malformed or unsupported events, event-identifier reuse with different content, missing items,
 and items in any state other than `RESERVED` or `AVAILABLE` are deterministic failures. Inventory
 does not retry them and does not change inventory or history; it publishes the original record to
-a dead-letter topic for investigation. Transient processing failures receive five total attempts,
+a dead-letter topic for investigation. Transient processing failures receive five total attempts per retry cycle,
 using configurable delays whose defaults are 1, 2, 4, and 8 seconds, before the record is sent to
 the dead-letter topic. Inventory advances the source offset only after the broker confirms the
 dead-letter publication; failure to publish there leaves the source record eligible for delivery
@@ -160,12 +160,13 @@ failures receive another chance while invalid records do not block a partition f
   the original record directly to the dead-letter topic without a processing retry.
 - **AC3.2 (Unwanted):** If cancellation processing fails because of a classified transient
   infrastructure or database condition, then the Inventory consumer shall make at most five total
-  processing attempts for the source record.
+  processing attempts for the source record within each retry cycle. A change of exception type
+  or failed dead-letter publication starts a new cycle as specified in `design.md` §6.2.
 - **AC3.3 (Event-driven):** When another transient processing attempt remains, the Inventory
   consumer shall delay it according to configurable backoff whose default successive delays are
   1, 2, 4, and 8 seconds.
-- **AC3.4 (Unwanted):** If all five transient processing attempts fail, then the Inventory consumer
-  shall route the original record to the dead-letter topic without committing a partial inventory,
+- **AC3.4 (Unwanted):** If all configured transient processing attempts in a retry cycle fail, then
+  the Inventory consumer shall route the original record to the dead-letter topic without committing a partial inventory,
   history, or inbox change.
 - **AC3.5 (Event-driven):** When Inventory publishes a failed source record to the dead-letter
   topic, the Inventory service shall preserve the original event payload and Kafka record key,
@@ -255,8 +256,10 @@ clients.
    This feature records external producer assumptions while accepting only Inventory's consumer
    behavior. See `design.md` §3.
 5. **Retry classification:** Explicit contract and deterministic business rejections go directly
-   to dead-letter handling. All other processing exceptions receive four blocking retries with
-   default delays of 1, 2, 4, and 8 seconds. See `design.md` §6.1-§6.2.
+   to dead-letter handling, as do Spring's standard fatal exceptions. Other processing exceptions
+   receive up to four blocking retries per cycle with default delays of 1, 2, 4, and 8 seconds.
+   Exception-type changes and failed DLT publication reset the cycle; five attempts is not a
+   lifetime limit for a source record. See `design.md` §6.1-§6.2.
 6. **Inbox design:** An append-only Inventory-owned receipt stores the event identity, canonical
    fingerprint, serial number, occurrence time, outcome, and PostgreSQL processing time. An
    event-scoped advisory lock and item row lock protect processing; receipts never expire. See

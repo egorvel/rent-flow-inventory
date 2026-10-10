@@ -34,7 +34,7 @@ delivery or use a distributed transaction between Kafka and PostgreSQL.
 | Idempotency | Persist an indefinite inbox receipt under `eventId`; duplicate delivery never reevaluates the item's current state. |
 | Already available | Record `ALREADY_AVAILABLE` as a successful no-op without creating false same-state history. |
 | Reservation identity | Carry no `reservationId` or ownership token; the accepted stale-first-delivery limitation remains explicit. |
-| Retry | Use four blocking retries after the initial attempt, with default delays of 1, 2, 4, and 8 seconds. |
+| Retry | Use four blocking retries per cycle after the initial attempt, with default delays of 1, 2, 4, and 8 seconds; retain Spring's state resets on exception changes and failed recovery. |
 | Recovery | Publish deterministic failures immediately and exhausted failures eventually to an Inventory-owned dead-letter topic. |
 | Feedback | Publish no result event; logs, metrics, the DLT, and the existing history API are the observable surfaces. |
 
@@ -304,9 +304,10 @@ The method returns a small immutable outcome enum:
 
 Contract and deterministic business failures throw
 `ReservationCancellationRejectedException`, which carries a stable failure code and a nullable
-parseable event ID but never stores the raw payload in its message. All other exceptions remain
-retryable by default. After successful conversion, the listener wraps an otherwise retryable
-processing exception with the already parsed event ID and original cause so exhausted recovery can
+parseable event ID but never stores the raw payload in its message. Spring's standard fatal
+exceptions also bypass retry; remaining exceptions are retryable by default. After successful
+conversion, the listener wraps an otherwise retryable processing exception with the already parsed
+event ID and original cause so exhausted recovery can
 include the identifier without reparsing or logging the payload. Before conversion completes, the
 converter attaches an event ID only when that field was independently parseable.
 
@@ -471,23 +472,30 @@ repository method deletes or updates a receipt.
 | `EVENT_ID_REUSED` | A completed ID has another canonical fingerprint | No |
 | `INVENTORY_ITEM_NOT_FOUND` | No item exists for the serial | No |
 | `INVALID_INVENTORY_STATUS` | The item is neither `RESERVED` nor `AVAILABLE` | No |
-| `PROCESSING_RETRIES_EXHAUSTED` | Any other exception remains after all five attempts | Four retries, then DLT |
+| `PROCESSING_RETRIES_EXHAUSTED` | Other processing failure after retry exhaustion, or a framework-classified fatal exception | Four retries by default; framework-fatal failures go directly to DLT |
 
 The explicit rejections are deterministic for that record and current committed business state;
-retrying them immediately would only block the partition. All other listener exceptions are
-retryable by default. This intentionally gives unforeseen database and infrastructure failures a
+retrying them immediately would only block the partition. Spring's standard fatal classifications
+(including conversion failures and ClassCastException) also recover without retry. Other listener
+exceptions are retryable by default. This gives unforeseen database and infrastructure failures a
 bounded second chance without attempting an incomplete vendor-specific exception allowlist.
 
 ### 6.2 Blocking retry configuration
 
 `InventoryKafkaConfig` creates one `DefaultErrorHandler` around the DLT recoverer.
-`ExponentialBackOffWithMaxRetries(maxAttempts - 1)` is configured with default initial interval
+Spring `ExponentialBackOff`, with `setMaxAttempts(maxAttempts - 1)`, uses default initial interval
 1000 ms, multiplier 2, and maximum interval 8000 ms. With the default five attempts, the resulting
 deliveries are the initial attempt plus retries after 1, 2, 4, and 8 seconds. The values bind from
-§4.1 and preserve those defaults.
+§4.1 and preserve those defaults. A configured single processing attempt allows no retries;
+zero delays allow immediate retries bounded by the configured count. Retry-state resets on
+exception changes and DLT recovery failure retain Spring's existing behavior: each reset starts
+a fresh retry cycle, so the configured count is not a lifetime delivery cap for a source record.
 
 `ReservationCancellationRejectedException` is classified as not retryable. The error handler's
-retry listener increments the bounded `retry` counter for each actual retry. Retry topics and
+per-record observed backoff increments the bounded `retry` counter only when nextBackOff returns
+a delay instead of STOP; failed-delivery notifications alone do not establish retry scheduling.
+See [observability design §4](../observability/design.md#4-cancellation-processing-and-dlt).
+Retry topics and
 `@RetryableTopic` are not used: the short blocking sequence is simpler and preserves source
 partition order during recovery. The total default delay is 15 seconds, comfortably below the
 consumer's poll interval budget; configuration validation rejects fewer than one attempt,
@@ -667,7 +675,7 @@ schema and ordering.
 | Item in another status | None | Immediate `INVALID_INVENTORY_STATUS` DLT | Commit only after DLT acknowledgement |
 | Invalid key/value/contract | None | Immediate validation DLT | Commit only after DLT acknowledgement |
 | Transient/unexpected exception, later success | Successful attempt only | Up to four blocking retries | Commit after successful DB commit |
-| All five attempts fail | None | `PROCESSING_RETRIES_EXHAUSTED` DLT | Commit only after DLT acknowledgement |
+| All configured attempts in a cycle fail | None | `PROCESSING_RETRIES_EXHAUSTED` DLT | Commit only after DLT acknowledgement |
 | DLT send fails | None | Recovery is attempted again | Do not commit source offset |
 | Crash after DB commit, before offset | Durable first effect | Inbox suppresses redelivery | Later duplicate advances offset |
 | Crash after DLT send, before offset | Possible duplicate DLT | Recovery may publish again | No failure is lost |

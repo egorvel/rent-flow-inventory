@@ -3,9 +3,12 @@ package com.rentflow;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
@@ -19,17 +22,27 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.micrometer.tracing.test.autoconfigure.AutoConfigureTracing;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -47,11 +60,15 @@ import com.rentflow.service.InventoryService;
 import com.rentflow.support.PostgresIntegrationTest;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
 import io.micrometer.tracing.Tracer;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.SpanData;
 import io.opentelemetry.sdk.trace.export.SpanExporter;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -72,9 +89,11 @@ import static org.mockito.Mockito.*;
         })
 @Import(ReservationCancellationKafkaIT.KafkaTopics.class)
 @AutoConfigureTracing
+@ExtendWith(OutputCaptureExtension.class)
 @MockitoSpyBean(types = KafkaTemplate.class, name = "kafkaTemplate")
 class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
     private static final InMemorySpanExporter SPANS = InMemorySpanExporter.create();
+    private static final ConcurrentMap<String, ObservedKafkaRecord> OBSERVED = new ConcurrentHashMap<>();
     private static final String SOURCE = "reservation-cancellation-source-it";
     private static final String DLT = "reservation-cancellation-dlt-it";
     private static final String GROUP = "reservation-cancellation-kafka-it";
@@ -119,10 +138,11 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         inventory.deleteAllInBatch();
         tracerProvider.forceFlush().join(5, TimeUnit.SECONDS);
         SPANS.reset();
+        OBSERVED.clear();
     }
 
     @Test
-    void correlatesProducerRetryAndCommittedReleaseWithOneOriginatingTrace() throws Exception {
+    void correlatesProducerRetryAndCommittedReleaseWithOneOriginatingTrace(CapturedOutput output) throws Exception {
         String serial = "KAFKA-TRACED-RETRY";
         UUID eventId = UUID.randomUUID();
         inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Kafka", InventoryStatus.RESERVED));
@@ -134,14 +154,18 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         io.micrometer.tracing.Span origin =
                 tracer.nextSpan().name("reservation.cancel").start();
         String traceId = origin.context().traceId();
+        org.springframework.kafka.support.SendResult<byte[], byte[]> sent;
         try (Tracer.SpanInScope scope = tracer.withSpan(origin)) {
-            kafka.send(SOURCE, bytes(serial), event(eventId, serial, "2026-09-15T15:30:00Z"))
+            sent = kafka.send(SOURCE, bytes(serial), event(eventId, serial, "2026-09-15T15:30:00Z"))
                     .get();
         } finally {
             origin.end();
         }
         await(() -> inbox.findById(eventId).isPresent());
         await(() -> counter("retry") == retries + 1);
+        await(() -> committedOffset(
+                        new TopicPartition(SOURCE, sent.getRecordMetadata().partition()))
+                >= sent.getRecordMetadata().offset() + 1);
         tracerProvider.forceFlush().join(5, TimeUnit.SECONDS);
         java.util.List<SpanData> spans = SPANS.getFinishedSpanItems().stream()
                 .filter(span -> span.getTraceId().equals(traceId))
@@ -153,10 +177,25 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
                         .doesNotContain(serial, "synthetic-private-value"));
         assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
         assertThat(history.count()).isOne();
+        assertThat(kafkaLogs(output, eventId, "retry")).singleElement().satisfies(log -> {
+            assertThat(log.path("traceId").asText()).isEqualTo(traceId);
+            assertThat(spans.stream()
+                            .filter(span -> span.getKind() == io.opentelemetry.api.trace.SpanKind.CONSUMER)
+                            .map(SpanData::getSpanId))
+                    .contains(log.path("spanId").asText());
+            assertThat(log.path("deliveryAttempt").asInt()).isOne();
+            assertThat(log.path("failureCode").asText()).isEqualTo("RETRYABLE_PROCESSING_FAILURE");
+            assertThat(log.path("log").path("level").asText()).isEqualTo("WARN");
+            assertThat(log.path("partition").asInt())
+                    .isEqualTo(sent.getRecordMetadata().partition());
+            assertThat(log.path("offset").asLong())
+                    .isEqualTo(sent.getRecordMetadata().offset());
+            assertThat(log.toString()).doesNotContain(serial, "synthetic-private-value");
+        });
     }
 
     @Test
-    void failedDltPublicationRetainsOffsetUntilConfirmedRecovery() throws Exception {
+    void failedDltPublicationRetainsOffsetUntilConfirmedRecovery(CapturedOutput output) throws Exception {
         String serial = "KAFKA-DLT-FAILURE";
         UUID eventId = UUID.randomUUID();
         java.util.concurrent.atomic.AtomicBoolean failSend = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -169,9 +208,16 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
                         record.topic().equals(DLT)));
         double failures = counter("dead_letter_publish_failure");
         double recovered = counter("dead_letter");
-        org.springframework.kafka.support.SendResult<byte[], byte[]> sent = kafka.send(
-                        SOURCE, bytes(serial), event(eventId, serial, "2026-09-15T15:30:00Z"))
-                .get();
+        io.micrometer.tracing.Span origin =
+                tracer.nextSpan().name("reservation.cancel").start();
+        String traceId = origin.context().traceId();
+        org.springframework.kafka.support.SendResult<byte[], byte[]> sent;
+        try (Tracer.SpanInScope scope = tracer.withSpan(origin)) {
+            sent = kafka.send(SOURCE, bytes(serial), event(eventId, serial, "2026-09-15T15:30:00Z"))
+                    .get();
+        } finally {
+            origin.end();
+        }
         TopicPartition partition =
                 new TopicPartition(SOURCE, sent.getRecordMetadata().partition());
         await(() -> counter("dead_letter_publish_failure") > failures);
@@ -183,6 +229,29 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         assertThat(header(deadLetter, "rentflow.dlt.event-id")).isEqualTo(eventId.toString());
         await(() -> counter("dead_letter") > recovered);
         await(() -> committedOffset(partition) >= sent.getRecordMetadata().offset() + 1);
+        tracerProvider.forceFlush().join(5, TimeUnit.SECONDS);
+        List<String> consumerSpanIds = SPANS.getFinishedSpanItems().stream()
+                .filter(span -> span.getTraceId().equals(traceId))
+                .filter(span -> span.getKind() == io.opentelemetry.api.trace.SpanKind.CONSUMER)
+                .map(SpanData::getSpanId)
+                .toList();
+        assertThat(kafkaLogs(output, eventId, "dead_letter_publish_failure"))
+                .isNotEmpty()
+                .allSatisfy(log -> {
+                    assertThat(log.path("log").path("level").asText()).isEqualTo("ERROR");
+                    assertThat(log.path("traceId").asText()).isEqualTo(traceId);
+                    assertThat(consumerSpanIds).contains(log.path("spanId").asText());
+                    assertThat(log.path("partition").asInt()).isEqualTo(partition.partition());
+                    assertThat(log.path("offset").asLong())
+                            .isEqualTo(sent.getRecordMetadata().offset());
+                    assertThat(log.path("error").path("stack_trace").asText())
+                            .contains("IllegalStateException", "ReservationCancellationKafkaIT");
+                    assertThat(log.toString()).doesNotContain(serial, "synthetic-private-value");
+                });
+        assertThat(kafkaLogs(output, eventId, "dead_letter")).singleElement().satisfies(log -> {
+            assertThat(log.path("traceId").asText()).isEqualTo(traceId);
+            assertThat(consumerSpanIds).contains(log.path("spanId").asText());
+        });
     }
 
     @Test
@@ -208,6 +277,108 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         await(() -> inbox.findById(eventId).isPresent());
         assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
         assertThat(history.count()).isOne();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"valid", "duplicate", "missing", "malformed", "oversized", "invalid-last"})
+    void normalizesHeadersBeforeObservationStartAndParentExtraction(String variant) throws Exception {
+        String serial = "KAFKA-CONTEXT-" + variant;
+        UUID eventId = UUID.randomUUID();
+        inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Kafka", InventoryStatus.RESERVED));
+        String parent = "00-11111111111111111111111111111111-2222222222222222-01";
+        org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> record =
+                new org.apache.kafka.clients.producer.ProducerRecord<>(
+                        SOURCE, 0, bytes(serial), event(eventId, serial, "2026-09-15T15:30:00Z"));
+        switch (variant) {
+            case "valid" -> record.headers().add("traceparent", bytes(parent));
+            case "duplicate" -> {
+                record.headers().add("traceparent", bytes("invalid"));
+                record.headers().add("traceparent", bytes(parent));
+            }
+            case "malformed" -> record.headers().add("traceparent", bytes("invalid"));
+            case "oversized" ->
+                record.headers().add("traceparent", bytes("01" + parent.substring(2) + "-" + "a".repeat(500)));
+            case "invalid-last" -> {
+                record.headers().add("traceparent", bytes(parent));
+                record.headers().add("traceparent", bytes("invalid"));
+            }
+            case "missing" -> {}
+            default -> throw new AssertionError("Unknown context variant");
+        }
+        record.headers().add("tracestate", bytes("vendor=state"));
+        record.headers().add("baggage", bytes("customer=synthetic-private-value"));
+        record.headers().add("b3", bytes("synthetic-private-value"));
+        Map<String, Object> properties = Map.of(
+                org.apache.kafka.clients.producer.ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
+                org.apache.kafka.clients.producer.ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
+                        org.apache.kafka.common.serialization.ByteArraySerializer.class,
+                org.apache.kafka.clients.producer.ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+                        org.apache.kafka.common.serialization.ByteArraySerializer.class);
+        org.apache.kafka.clients.producer.RecordMetadata sent;
+        try (org.apache.kafka.clients.producer.KafkaProducer<byte[], byte[]> producer =
+                new org.apache.kafka.clients.producer.KafkaProducer<>(properties)) {
+            sent = producer.send(record).get(5, TimeUnit.SECONDS);
+        }
+        await(() -> committedOffset(new TopicPartition(SOURCE, sent.partition())) >= sent.offset() + 1);
+        String observationKey = SOURCE + ":" + sent.partition() + ":" + sent.offset();
+        await(() -> OBSERVED.containsKey(observationKey)
+                && OBSERVED.get(observationKey).spanId() != null);
+        ObservedKafkaRecord observed = OBSERVED.get(observationKey);
+        assertThat(observed.headers().lastHeader("baggage")).isNull();
+        assertThat(observed.headers().lastHeader("b3")).isNull();
+        tracerProvider.forceFlush().join(5, TimeUnit.SECONDS);
+        SpanData consumer = SPANS.getFinishedSpanItems().stream()
+                .filter(span -> span.getSpanId().equals(observed.spanId()))
+                .findFirst()
+                .orElseThrow();
+        boolean valid = variant.equals("valid") || variant.equals("duplicate");
+        if (valid) {
+            assertThat(observed.headers().headers("traceparent")).hasSize(1);
+            assertThat(new String(observed.headers().lastHeader("traceparent").value(), StandardCharsets.UTF_8))
+                    .isEqualTo(parent);
+            assertThat(new String(observed.headers().lastHeader("tracestate").value(), StandardCharsets.UTF_8))
+                    .isEqualTo("vendor=state");
+            assertThat(consumer.getTraceId()).isEqualTo("11111111111111111111111111111111");
+            assertThat(consumer.getParentSpanId()).isEqualTo("2222222222222222");
+            assertThat(consumer.getSpanContext().getTraceState().get("vendor")).isEqualTo("state");
+        } else {
+            assertThat(observed.headers().lastHeader("traceparent")).isNull();
+            assertThat(observed.headers().lastHeader("tracestate")).isNull();
+            assertThat(consumer.getTraceId()).isNotEqualTo("11111111111111111111111111111111");
+            assertThat(consumer.getParentSpanId()).isEqualTo("0000000000000000");
+        }
+        assertThat(inbox.findById(eventId)).isPresent();
+        assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
+        assertThat(history.count()).isOne();
+    }
+
+    @Test
+    void frameworkFatalProcessingFailureGoesStraightToDltWithoutRetryDiagnostics(CapturedOutput output)
+            throws Exception {
+        String serial = "KAFKA-FATAL-PROCESSING";
+        UUID eventId = UUID.randomUUID();
+        inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Kafka", InventoryStatus.RESERVED));
+        doThrow(new ClassCastException("synthetic-private-value"))
+                .when(service)
+                .releaseAfterCancellation(argThat(event -> event.eventId().equals(eventId)));
+        double retries = counter("retry");
+        org.springframework.kafka.support.SendResult<byte[], byte[]> sent = kafka.send(
+                        SOURCE, bytes(serial), event(eventId, serial, "2026-09-15T15:30:00Z"))
+                .get();
+        ConsumerRecord<byte[], byte[]> deadLetter = consumeDlt(bytes(serial));
+        await(() -> committedOffset(
+                        new TopicPartition(SOURCE, sent.getRecordMetadata().partition()))
+                >= sent.getRecordMetadata().offset() + 1);
+        assertThat(counter("retry")).isEqualTo(retries);
+        assertThat(kafkaLogs(output, eventId, "retry")).isEmpty();
+        assertThat(kafkaLogs(output, eventId, "dead_letter"))
+                .singleElement()
+                .satisfies(log ->
+                        assertThat(log.path("log").path("level").asText()).isEqualTo("ERROR"));
+        assertThat(inbox.findById(eventId)).isEmpty();
+        assertThat(history.count()).isZero();
+        assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.RESERVED);
+        assertDltTrace(deadLetter, 1);
     }
 
     @Test
@@ -360,6 +531,21 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
                                 "synthetic-private-value", new String(deadLetter.key(), StandardCharsets.UTF_8)));
     }
 
+    private List<JsonNode> kafkaLogs(CapturedOutput output, UUID eventId, String outcome) {
+        JsonMapper mapper = JsonMapper.builder().build();
+        return output.getOut()
+                .lines()
+                .filter(line -> line.startsWith("{"))
+                .map(mapper::readTree)
+                .filter(log ->
+                        log.path("log").path("logger").asText().equals("com.rentflow.config.InventoryKafkaConfig"))
+                .filter(log -> log.path("eventId").asText().equals(eventId.toString()))
+                .filter(log -> log.path("outcome").asText().equals(outcome))
+                .toList();
+    }
+
+    private record ObservedKafkaRecord(Headers headers, String spanId) {}
+
     private long committedOffset(TopicPartition partition) {
         try (AdminClient admin =
                 AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers()))) {
@@ -435,6 +621,42 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class KafkaTopics {
+        @Bean
+        @Order(Ordered.HIGHEST_PRECEDENCE)
+        ObservationHandler<Observation.Context> captureKafkaObservationHeaders(Tracer tracer) {
+            return new ObservationHandler<>() {
+                @Override
+                public boolean supportsContext(Observation.Context context) {
+                    return context instanceof KafkaRecordReceiverContext;
+                }
+
+                @Override
+                public void onStart(Observation.Context context) {
+                    KafkaRecordReceiverContext receiver = (KafkaRecordReceiverContext) context;
+                    ConsumerRecord<?, ?> record = receiver.getRecord();
+                    String key = record.topic() + ":" + record.partition() + ":" + record.offset();
+                    OBSERVED.put(
+                            key,
+                            new ObservedKafkaRecord(
+                                    new RecordHeaders(record.headers().toArray()), null));
+                }
+
+                @Override
+                public void onStop(Observation.Context context) {
+                    KafkaRecordReceiverContext receiver = (KafkaRecordReceiverContext) context;
+                    ConsumerRecord<?, ?> record = receiver.getRecord();
+                    String key = record.topic() + ":" + record.partition() + ":" + record.offset();
+                    io.micrometer.tracing.Span span = tracer.currentSpan();
+                    if (span != null) {
+                        OBSERVED.computeIfPresent(
+                                key,
+                                (_, observed) -> new ObservedKafkaRecord(
+                                        observed.headers(), span.context().spanId()));
+                    }
+                }
+            };
+        }
+
         @Bean
         SpanExporter recordingSpanExporter() {
             return SPANS;

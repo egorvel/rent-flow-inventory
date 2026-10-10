@@ -454,10 +454,11 @@ means an existing receipt suppressed this delivery.
 | `EVENT_ID_REUSED` | Existing event ID has a different canonical fingerprint | No |
 | `INVENTORY_ITEM_NOT_FOUND` | The serial number does not exist | No |
 | `INVALID_INVENTORY_STATUS` | Item is neither `RESERVED` nor `AVAILABLE` | No |
-| `PROCESSING_RETRIES_EXHAUSTED` | An otherwise retryable exception failed every attempt | Four retries, then DLT |
+| `PROCESSING_RETRIES_EXHAUSTED` | Retry exhaustion or a framework-classified fatal exception | Four retries per cycle by default; framework-fatal failures go directly to DLT |
 
 Deterministic failures are not retried because repeating the same record immediately will not fix
-them and would block later records in the partition. Other runtime failures are treated as
+them and would block later records in the partition. Spring's standard fatal exceptions also
+bypass retries. Other runtime failures are treated as
 potentially transient, for example an unexpected database or infrastructure problem.
 
 Rejected events do not receive inbox rows. The DLT record is the durable evidence of their failure.
@@ -466,7 +467,7 @@ Rejected events do not receive inbox rows. The DLT record is the durable evidenc
 
 `InventoryKafkaConfig` creates a Spring Kafka `DefaultErrorHandler`.
 
-With the defaults, one record can have five total attempts:
+With the defaults, one retry cycle has five total attempts:
 
 ```text
 initial attempt
@@ -485,7 +486,14 @@ Every failed service attempt has already rolled back its database transaction be
 handler waits. A retry starts a new listener invocation and a new transaction.
 
 `ReservationCancellationRejectedException` is explicitly configured as non-retryable. The retry
-listener increments the `retry` metric only when another retry will actually occur.
+counter and WARN log are emitted only after the backoff returns a delay rather than STOP. Failed
+delivery notifications alone do not establish that a retry was scheduled. Retry logs use
+`RETRYABLE_PROCESSING_FAILURE`; successful recovery retains the existing DLT failure codes.
+
+The count uses `ExponentialBackOff.setMaxAttempts(maxAttempts - 1)`. A configured single attempt
+allows no retries, and zero backoff permits immediate retries bounded by the count. Spring resets
+the retry cycle on exception-type changes or failed DLT publication, so the configured count is
+not a lifetime limit for a source record.
 
 ## 15. Dead-letter handling
 
@@ -567,7 +575,7 @@ Possible outcomes are:
 | `released` | A real release transaction succeeds |
 | `already_available` | A successful no-op receipt is committed |
 | `duplicate` | A matching receipt suppresses processing |
-| `retry` | The error handler will make another attempt |
+| `retry` | The error handler scheduled another attempt |
 | `dead_letter` | Kafka confirms DLT publication |
 | `dead_letter_publish_failure` | DLT recovery itself fails |
 

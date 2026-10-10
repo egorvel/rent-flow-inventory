@@ -2,7 +2,8 @@
 
 ## 1. Delivery rules
 
-Each task is one safe commit. T1 → T2 → T3 → T4 → T5 → T6. All are required for this feature.
+Each task is one safe commit. T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9.
+All are required for this feature; T7–T9 close the Kafka review findings after the baseline.
 Keep existing project layers, explicit Java types, persistence contracts and mandatory clean verify.
 The seven resolved decisions are recorded in requirements.md; no additional product decisions remain.
 
@@ -60,3 +61,36 @@ DoD.: Documentation gives executable host/container instructions, full endpoint/
 contracts and alert expressions/signals; mvn -B -ntp clean verify reports BUILD SUCCESS and
 Inventory smoke test succeeds. Clearly distinguish Inventory checks from Common/Reservation
 end-to-end acceptance. Re-evaluate modified specs and preserve dated reports.
+
+### T7 — Normalize Kafka context before observation extraction
+
+Refs.: AC2.1, AC2.5; design.md §4.
+
+Move normalization to a Kafka consumer interceptor, register it last through Boot's consumer-factory
+customizer without duplicating it or dropping other interceptors, and restore Boot's listener factory.
+DoD.: Unit tests prove registration preserves configured interceptors and the original record bytes.
+Real-consumer tests inspect normalized headers at observation start for valid, duplicate, missing,
+malformed and oversized context; valid parents are retained and rejected context cannot parent a span.
+Existing retry/DLT parent, header-allowlist, partition, offset and inbox assertions still pass.
+
+### T8 — Observe scheduled retries and enforce their count
+
+Refs.: AC2.1, AC2.3; design.md §4.
+
+Use count-bounded ExponentialBackOff and observe its per-record nextBackOff decisions, retaining
+Spring's classification and retry-state resets. Emit RETRYABLE_PROCESSING_FAILURE for retry logs.
+DoD.: Tests cover processing-attempt limits 1–5, zero delays, multiplier one and exhausted recovery;
+scheduled counters/logs match actual backoff decisions and their failed-attempt numbers exactly.
+Framework-fatal and business-rejection failures produce no retry WARN or retry increment. Exception
+changes and recovery failures reset retry state as before; default delays remain 1, 2, 4, 8 seconds.
+
+### T9 — Preserve safe DLT causes and verify serialized callbacks
+
+Refs.: AC2.3, AC2.6, AC4.1, AC4.2; design.md §3, §4, §6.
+
+Attach publication failures to their fixed ERROR message and reuse the existing safe stack printer.
+Reconcile affected cancellation documentation and run the complete service checks.
+DoD.: Actual callback logs serialized by the configured ECS encoder retain severity, source metadata,
+event/trace/span correlation and safe cause types/frames without synthetic private values. Failed
+publication still retains the source offset until confirmed recovery. Affected specs have dated
+evaluation reports; Maven clean verify reports BUILD SUCCESS and Inventory container smoke passes.
