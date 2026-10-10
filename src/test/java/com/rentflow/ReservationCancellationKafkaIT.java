@@ -7,9 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import org.apache.kafka.clients.admin.AdminClient;
@@ -22,8 +21,6 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.header.Header;
-import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,11 +35,8 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.micrometer.KafkaRecordReceiverContext;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -60,9 +54,8 @@ import com.rentflow.service.InventoryService;
 import com.rentflow.support.PostgresIntegrationTest;
 
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.observation.Observation;
-import io.micrometer.observation.ObservationHandler;
 import io.micrometer.tracing.Tracer;
+import io.opentelemetry.api.baggage.Baggage;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.data.SpanData;
@@ -93,7 +86,6 @@ import static org.mockito.Mockito.*;
 @MockitoSpyBean(types = KafkaTemplate.class, name = "kafkaTemplate")
 class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
     private static final InMemorySpanExporter SPANS = InMemorySpanExporter.create();
-    private static final ConcurrentMap<String, ObservedKafkaRecord> OBSERVED = new ConcurrentHashMap<>();
     private static final String SOURCE = "reservation-cancellation-source-it";
     private static final String DLT = "reservation-cancellation-dlt-it";
     private static final String GROUP = "reservation-cancellation-kafka-it";
@@ -138,7 +130,6 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         inventory.deleteAllInBatch();
         tracerProvider.forceFlush().join(5, TimeUnit.SECONDS);
         SPANS.reset();
-        OBSERVED.clear();
     }
 
     @Test
@@ -280,34 +271,34 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"valid", "duplicate", "missing", "malformed", "oversized", "invalid-last"})
-    void normalizesHeadersBeforeObservationStartAndParentExtraction(String variant) throws Exception {
+    @ValueSource(strings = {"valid", "missing", "malformed"})
+    void frameworkPropagatesUsableContextAndDisablesBaggage(String variant) throws Exception {
         String serial = "KAFKA-CONTEXT-" + variant;
         UUID eventId = UUID.randomUUID();
         inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Kafka", InventoryStatus.RESERVED));
+        AtomicReference<String> consumerSpanId = new AtomicReference<>();
+        AtomicReference<Boolean> baggageEmpty = new AtomicReference<>();
+        doAnswer(invocation -> {
+                    io.micrometer.tracing.Span span = tracer.currentSpan();
+                    assertThat(span).isNotNull();
+                    consumerSpanId.set(span.context().spanId());
+                    baggageEmpty.set(Baggage.current().asMap().isEmpty());
+                    return invocation.callRealMethod();
+                })
+                .when(service)
+                .releaseAfterCancellation(argThat(event -> event.eventId().equals(eventId)));
         String parent = "00-11111111111111111111111111111111-2222222222222222-01";
         org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> record =
                 new org.apache.kafka.clients.producer.ProducerRecord<>(
                         SOURCE, 0, bytes(serial), event(eventId, serial, "2026-09-15T15:30:00Z"));
         switch (variant) {
             case "valid" -> record.headers().add("traceparent", bytes(parent));
-            case "duplicate" -> {
-                record.headers().add("traceparent", bytes("invalid"));
-                record.headers().add("traceparent", bytes(parent));
-            }
             case "malformed" -> record.headers().add("traceparent", bytes("invalid"));
-            case "oversized" ->
-                record.headers().add("traceparent", bytes("01" + parent.substring(2) + "-" + "a".repeat(500)));
-            case "invalid-last" -> {
-                record.headers().add("traceparent", bytes(parent));
-                record.headers().add("traceparent", bytes("invalid"));
-            }
             case "missing" -> {}
             default -> throw new AssertionError("Unknown context variant");
         }
         record.headers().add("tracestate", bytes("vendor=state"));
         record.headers().add("baggage", bytes("customer=synthetic-private-value"));
-        record.headers().add("b3", bytes("synthetic-private-value"));
         Map<String, Object> properties = Map.of(
                 org.apache.kafka.clients.producer.ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers(),
                 org.apache.kafka.clients.producer.ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,
@@ -320,36 +311,26 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
             sent = producer.send(record).get(5, TimeUnit.SECONDS);
         }
         await(() -> committedOffset(new TopicPartition(SOURCE, sent.partition())) >= sent.offset() + 1);
-        String observationKey = SOURCE + ":" + sent.partition() + ":" + sent.offset();
-        await(() -> OBSERVED.containsKey(observationKey)
-                && OBSERVED.get(observationKey).spanId() != null);
-        ObservedKafkaRecord observed = OBSERVED.get(observationKey);
-        assertThat(observed.headers().lastHeader("baggage")).isNull();
-        assertThat(observed.headers().lastHeader("b3")).isNull();
+        assertThat(consumerSpanId.get()).isNotNull();
+        assertThat(baggageEmpty.get()).isTrue();
         tracerProvider.forceFlush().join(5, TimeUnit.SECONDS);
         SpanData consumer = SPANS.getFinishedSpanItems().stream()
-                .filter(span -> span.getSpanId().equals(observed.spanId()))
+                .filter(span -> span.getSpanId().equals(consumerSpanId.get()))
                 .findFirst()
                 .orElseThrow();
-        boolean valid = variant.equals("valid") || variant.equals("duplicate");
-        if (valid) {
-            assertThat(observed.headers().headers("traceparent")).hasSize(1);
-            assertThat(new String(observed.headers().lastHeader("traceparent").value(), StandardCharsets.UTF_8))
-                    .isEqualTo(parent);
-            assertThat(new String(observed.headers().lastHeader("tracestate").value(), StandardCharsets.UTF_8))
-                    .isEqualTo("vendor=state");
+        if (variant.equals("valid")) {
             assertThat(consumer.getTraceId()).isEqualTo("11111111111111111111111111111111");
             assertThat(consumer.getParentSpanId()).isEqualTo("2222222222222222");
             assertThat(consumer.getSpanContext().getTraceState().get("vendor")).isEqualTo("state");
         } else {
-            assertThat(observed.headers().lastHeader("traceparent")).isNull();
-            assertThat(observed.headers().lastHeader("tracestate")).isNull();
             assertThat(consumer.getTraceId()).isNotEqualTo("11111111111111111111111111111111");
             assertThat(consumer.getParentSpanId()).isEqualTo("0000000000000000");
         }
         assertThat(inbox.findById(eventId)).isPresent();
         assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
         assertThat(history.count()).isOne();
+        assertThat(consumer.getAttributes().toString() + consumer.getEvents())
+                .doesNotContain(serial, "synthetic-private-value");
     }
 
     @Test
@@ -544,8 +525,6 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
                 .toList();
     }
 
-    private record ObservedKafkaRecord(Headers headers, String spanId) {}
-
     private long committedOffset(TopicPartition partition) {
         try (AdminClient admin =
                 AdminClient.create(Map.of(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, KAFKA.getBootstrapServers()))) {
@@ -621,42 +600,6 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
 
     @TestConfiguration(proxyBeanMethods = false)
     static class KafkaTopics {
-        @Bean
-        @Order(Ordered.HIGHEST_PRECEDENCE)
-        ObservationHandler<Observation.Context> captureKafkaObservationHeaders(Tracer tracer) {
-            return new ObservationHandler<>() {
-                @Override
-                public boolean supportsContext(Observation.Context context) {
-                    return context instanceof KafkaRecordReceiverContext;
-                }
-
-                @Override
-                public void onStart(Observation.Context context) {
-                    KafkaRecordReceiverContext receiver = (KafkaRecordReceiverContext) context;
-                    ConsumerRecord<?, ?> record = receiver.getRecord();
-                    String key = record.topic() + ":" + record.partition() + ":" + record.offset();
-                    OBSERVED.put(
-                            key,
-                            new ObservedKafkaRecord(
-                                    new RecordHeaders(record.headers().toArray()), null));
-                }
-
-                @Override
-                public void onStop(Observation.Context context) {
-                    KafkaRecordReceiverContext receiver = (KafkaRecordReceiverContext) context;
-                    ConsumerRecord<?, ?> record = receiver.getRecord();
-                    String key = record.topic() + ":" + record.partition() + ":" + record.offset();
-                    io.micrometer.tracing.Span span = tracer.currentSpan();
-                    if (span != null) {
-                        OBSERVED.computeIfPresent(
-                                key,
-                                (_, observed) -> new ObservedKafkaRecord(
-                                        observed.headers(), span.context().spanId()));
-                    }
-                }
-            };
-        }
-
         @Bean
         SpanExporter recordingSpanExporter() {
             return SPANS;

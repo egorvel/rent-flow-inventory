@@ -320,11 +320,10 @@ bodies, SQL text/parameters and unrestricted MDC fields are excluded. SQL error/
 loggers that could print sensitive values are disabled. These logs are diagnostics, not a durable
 audit trail.
 
-Tracing uses validated W3C `traceparent`/`tracestate`, with baggage excluded. Kafka headers are
-normalized by a consumer interceptor before Spring creates the listener observation: the last
-header wins, each W3C header is bounded to 512 bytes, and an invalid traceparent starts a new
-trace. Invalid tracestate is discarded. Missing or malformed headers never reject a cancellation.
-DLT records retain their exact key/value/partition and
+Tracing uses framework W3C `traceparent`/`tracestate` propagation through Spring Kafka, Micrometer
+and OpenTelemetry. Baggage propagation is disabled with `management.tracing.baggage.enabled=false`.
+The tracing libraries handle incoming context; missing or unusable context does not reject a
+cancellation. DLT records retain their exact key/value/partition and
 diagnostic headers, plus valid tracing context. Retries share the originating trace and DLT
 publication has its own producer span. Reservation must separately preserve context in its
 durable outbox for producer-restart correlation. JDBC spans retain timing and datasource identity

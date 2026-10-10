@@ -2,18 +2,14 @@ package com.rentflow.config;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.Headers;
@@ -23,7 +19,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.kafka.autoconfigure.DefaultKafkaConsumerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -41,7 +36,6 @@ import com.rentflow.converter.ReservationCancellationEventConverter;
 import com.rentflow.model.ReservationCancellationFailureCode;
 import com.rentflow.model.ReservationCancellationProcessingException;
 import com.rentflow.model.ReservationCancellationRejectedException;
-import com.rentflow.util.KafkaTraceConsumerInterceptor;
 
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -59,23 +53,6 @@ public class InventoryKafkaConfig {
             "rentflow.dlt.failure-code",
             "rentflow.dlt.failed-at",
             "rentflow.dlt.event-id");
-
-    @Bean
-    DefaultKafkaConsumerFactoryCustomizer normalizeKafkaTraceBeforeObservation() {
-        return factory -> {
-            String name = ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG;
-            Object configured = factory.getConfigurationProperties().get(name);
-            List<?> existing = configured == null
-                    ? List.of()
-                    : (List<?>) ConfigDef.parseType(name, configured, ConfigDef.Type.LIST);
-            List<Object> interceptors = new ArrayList<>(existing);
-            String normalizer = KafkaTraceConsumerInterceptor.class.getName();
-            interceptors.removeIf(interceptor ->
-                    normalizer.equals(interceptor) || KafkaTraceConsumerInterceptor.class.equals(interceptor));
-            interceptors.add(normalizer);
-            factory.updateConfigs(Map.of(name, interceptors));
-        };
-    }
 
     @Bean
     DefaultErrorHandler reservationCancellationErrorHandler(

@@ -21,7 +21,8 @@ Service identity is rent-flow-inventory, environment defaults to local, instance
 HOSTNAME (or standalone). Metrics have bounded service/environment tags; Prometheus supplies
 target instance. ECS service node and OTel service.instance.id use the runtime instance.
 Enable HTTP histograms with expected range 1ms–10s. Exclude management/probe observations.
-Use W3C propagation with no remote baggage. Sampling defaults to 1 with the local profile and 0.1 otherwise,
+Use framework W3C propagation and disable baggage with management.tracing.baggage.enabled=false.
+Sampling defaults to 1 with the local profile and 0.1 otherwise,
 overridable through the standard property. Trace export is disabled by default through
 management.tracing.export.otlp.enabled; configure a full /v1/traces URL (default localhost:4318).
 Use HTTP/protobuf, two-second connect/call timeouts and bounded asynchronous batch export
@@ -77,17 +78,16 @@ failures do not contribute. Future occurredAt yields a clock_skew WARN and incre
 inventory.reservation.cancellation.clock.skew; it contributes no negative/zero delay sample.
 Use an injectable Clock for deterministic boundary tests. Histograms cover 1ms–7d.
 
-Keep existing diagnostic DLT headers and add valid traceparent/tracestate only. A stateless Kafka
-ConsumerInterceptor normalizes every polled record before Spring starts listener observations.
-Register it through Boot's DefaultKafkaConsumerFactoryCustomizer, retaining configured interceptors
-and appending the normalizer last exactly once; keep Boot's default listener-container factory.
-Before tracing extraction, normalize W3C headers to one valid context with each header limited to
-512 bytes, using the last header value; remove baggage and unsupported
-propagation headers; invalid context is ignored, never an event rejection. The observed producer
-injects its current span context into the outgoing record. Existing context-free events remain
-processable. DLT partition, bytes, default retry schedule, inbox transaction and offset rules remain
-intact. Regression tests inspect headers at observation start through a real Kafka consumer and
-serialize actual retry/recovery callback events through the configured ECS encoder.
+Delegate Kafka context extraction, parsing and propagation to Spring Kafka, Micrometer and
+OpenTelemetry, using Boot's default consumer and listener-container factories. Add no custom
+tracing-header validator, normalizer or consumer interceptor; header parsing and selection follow
+the configured libraries. Incoming record headers remain untouched by application tracing code.
+The observed template supplies the outgoing DLT traceparent/tracestate from the current listener
+scope alongside the existing diagnostic DLT headers. Missing or unusable tracing context does not
+reject a business event. DLT partition, bytes, default retry schedule, inbox transaction and offset
+rules remain intact. Integration tests prove producer/consumer and retry/DLT correlation, processing
+without usable context, and disabled baggage propagation. Serialize actual retry/recovery callback
+events through the configured ECS encoder.
 
 ## 5. Cleanup monitoring
 

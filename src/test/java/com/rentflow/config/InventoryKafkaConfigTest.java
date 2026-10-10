@@ -13,7 +13,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
@@ -33,7 +32,6 @@ import org.slf4j.MDC;
 import org.springframework.boot.logging.logback.StructuredLogEncoder;
 import org.springframework.core.MethodParameter;
 import org.springframework.core.env.Environment;
-import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 import org.springframework.kafka.listener.DefaultErrorHandler;
@@ -53,7 +51,6 @@ import org.springframework.util.backoff.BackOffExecution;
 import com.rentflow.converter.ReservationCancellationEventConverter;
 import com.rentflow.model.ReservationCancellationFailureCode;
 import com.rentflow.model.ReservationCancellationRejectedException;
-import com.rentflow.util.KafkaTraceConsumerInterceptor;
 import com.rentflow.util.SafeLogMembersCustomizer;
 import com.rentflow.util.SafeStackTracePrinter;
 
@@ -136,30 +133,6 @@ class InventoryKafkaConfigTest {
         encoder.stop();
         context.stop();
         metrics.close();
-    }
-
-    @ParameterizedTest
-    @MethodSource("configuredInterceptors")
-    void registersNormalizerLastOnceAndRetainsConfiguredInterceptors(Object existing, List<Object> expected) {
-        Map<String, Object> properties = existing == null
-                ? Map.of(ConsumerConfig.GROUP_ID_CONFIG, "group")
-                : Map.of(ConsumerConfig.GROUP_ID_CONFIG, "group", ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG, existing);
-        DefaultKafkaConsumerFactory<Object, Object> factory = new DefaultKafkaConsumerFactory<>(properties);
-        config.normalizeKafkaTraceBeforeObservation().customize(factory);
-        config.normalizeKafkaTraceBeforeObservation().customize(factory);
-        assertThat(factory.getConfigurationProperties())
-                .containsEntry(ConsumerConfig.GROUP_ID_CONFIG, "group")
-                .containsEntry(ConsumerConfig.INTERCEPTOR_CLASSES_CONFIG, expected);
-    }
-
-    static Stream<Arguments> configuredInterceptors() {
-        String normalizer = KafkaTraceConsumerInterceptor.class.getName();
-        return Stream.of(
-                Arguments.of(null, List.of(normalizer)),
-                Arguments.of("other.First, other.Second", List.of("other.First", "other.Second", normalizer)),
-                Arguments.of(
-                        List.of(normalizer, "other.First", KafkaTraceConsumerInterceptor.class, normalizer),
-                        List.of("other.First", normalizer)));
     }
 
     @ParameterizedTest

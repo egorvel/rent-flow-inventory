@@ -26,7 +26,7 @@ As an operator, I need cancellation outcomes, delay and failures correlated with
 - **AC2.2 (Event-driven):** When cancellation processing commits a released, already-available or duplicate result, the service shall write one structured INFO result record containing safe correlation fields.
 - **AC2.3 (Event-driven):** When a retry, confirmed DLT publication or DLT publication failure occurs, the service shall write a structured diagnostic with bounded failure information and source metadata.
 - **AC2.4 (Event-driven):** When released or already-available processing commits, the service shall measure completion delay from occurredAt, excluding duplicate/failure samples and diagnosing future timestamps without rejecting events.
-- **AC2.5 (Unwanted):** If tracing headers are absent or malformed, then cancellation processing shall continue; DLT records shall preserve their existing key, value and diagnostic headers while permitting valid W3C tracing headers and excluding arbitrary headers/baggage.
+- **AC2.5 (Unwanted):** If incoming tracing context is absent or unusable by the configured tracing libraries, then cancellation processing shall continue without rejecting the event; DLT records shall preserve their existing key, value and diagnostic headers, with tracing propagation supplied by framework instrumentation.
 - **AC2.6 (Ubiquitous):** The service shall emit stdout ECS JSON logs and sanitized spans that retain exception types and stack frames while excluding arbitrary exception messages, raw URLs, bodies, secrets, SQL text/values and customer/order data.
 
 ### US3 — Detect stalled cleanup
@@ -47,7 +47,8 @@ As an implementer, I need repeatable configuration and a concrete Common handoff
 ## Out of scope
 
 Common infrastructure implementation, dashboards/alerts provisioning, production TLS/authentication,
-SLO selection, Reservation outbox context persistence, database migrations and business API changes.
+SLO selection, Reservation outbox context persistence, custom Kafka tracing-header validation or
+normalization, database migrations and business API changes.
 
 ## Resolved questions
 
@@ -58,3 +59,5 @@ SLO selection, Reservation outbox context persistence, database migrations and b
 5. One INFO log per committed cancellation result. See design.md §4.
 6. Refresh backlog every minute. See design.md §5.
 7. Retain safe stack frames while removing arbitrary exception messages. See design.md §3.
+8. Delegate Kafka context extraction and propagation to the tracing libraries; disable baggage
+   through Spring configuration. See design.md §2, §4 and tasks.md T7.

@@ -3,9 +3,10 @@
 ## 1. Delivery rules
 
 Each task is one safe commit. T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9.
-All are required for this feature; T7–T9 close the Kafka review findings after the baseline.
+All are required for this feature; T7–T9 cover framework propagation and the Kafka review findings
+after the baseline.
 Keep existing project layers, explicit Java types, persistence contracts and mandatory clean verify.
-The seven resolved decisions are recorded in requirements.md; no additional product decisions remain.
+The resolved decisions are recorded in requirements.md; no additional product decisions remain.
 
 ### T1 — Record the agreed specification
 
@@ -38,7 +39,7 @@ parent/request/connection/query relationships, Flyway/JPA transactions and Hikar
 
 Refs.: AC2.1–AC2.5; design.md §4.
 
-Add result/retry/recovery logs, completion delay and validated W3C header handling.
+Add result/retry/recovery logs, completion delay and framework W3C propagation.
 DoD.: Tests assert existing outcome counters, one INFO per success, structured retries/DLT failures,
 delay eligibility and clock skew, trace parents on retries/DLT sends, missing/malformed context
 tolerance, DLT header allowlist and unchanged record bytes/partition/offset/inbox behavior.
@@ -62,15 +63,15 @@ contracts and alert expressions/signals; mvn -B -ntp clean verify reports BUILD 
 Inventory smoke test succeeds. Clearly distinguish Inventory checks from Common/Reservation
 end-to-end acceptance. Re-evaluate modified specs and preserve dated reports.
 
-### T7 — Normalize Kafka context before observation extraction
+### T7 — Use framework Kafka context propagation
 
-Refs.: AC2.1, AC2.5; design.md §4.
+Refs.: AC2.1, AC2.5, AC2.6; design.md §2, §4.
 
-Move normalization to a Kafka consumer interceptor, register it last through Boot's consumer-factory
-customizer without duplicating it or dropping other interceptors, and restore Boot's listener factory.
-DoD.: Unit tests prove registration preserves configured interceptors and the original record bytes.
-Real-consumer tests inspect normalized headers at observation start for valid, duplicate, missing,
-malformed and oversized context; valid parents are retained and rejected context cannot parent a span.
+Remove custom tracing-header normalization and its consumer-factory customization. Use the default
+framework extraction/propagation and disable baggage through Spring configuration.
+DoD.: Real-consumer tests prove valid producer context parents the Inventory span, cancellation
+processing succeeds with absent or unusable context, and incoming baggage is not propagated.
+The service has no custom tracing-header parser, size bound, duplicate policy or B3 removal code.
 Existing retry/DLT parent, header-allowlist, partition, offset and inbox assertions still pass.
 
 ### T8 — Observe scheduled retries and enforce their count

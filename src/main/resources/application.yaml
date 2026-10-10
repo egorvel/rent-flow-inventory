@@ -83,6 +83,8 @@ management:
   tracing:
     propagation:
       type: w3c
+    baggage:
+      enabled: false
     sampling:
       probability: ${TRACING_SAMPLING_PROBABILITY:0.1}
     export:
