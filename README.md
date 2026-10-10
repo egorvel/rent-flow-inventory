@@ -193,7 +193,7 @@ distributed transaction. Transient failures receive five total attempts with def
 `INVALID_INVENTORY_STATUS`.
 
 The DLT has three partitions, delete cleanup, and 30-day retention. It preserves the original key
-and value and adds only these bounded UTF-8 headers: `rentflow.dlt.source-topic`,
+and value and adds these bounded UTF-8 diagnostic headers: `rentflow.dlt.source-topic`,
 `rentflow.dlt.source-partition`, `rentflow.dlt.source-offset`, `rentflow.dlt.consumer-group`,
 `rentflow.dlt.failure-code`, `rentflow.dlt.failed-at`, and `rentflow.dlt.event-id` when parseable.
 There is no automatic replay. Alert on `dead_letter`, `dead_letter_publish_failure`, and sustained
@@ -246,12 +246,84 @@ With the service running locally:
 | Swagger UI | `http://localhost:8080/swagger-ui.html` |
 | OpenAPI document | `http://localhost:8080/v3/api-docs` |
 | Liveness | `http://localhost:8080/livez` |
-| Actuator liveness | `http://localhost:8080/actuator/health/liveness` |
+| Actuator liveness | `http://localhost:8085/actuator/health/liveness` |
 | Readiness | `http://localhost:8080/readyz` |
-| Actuator readiness | `http://localhost:8080/actuator/health/readiness` |
+| Actuator readiness | `http://localhost:8085/actuator/health/readiness` |
+| Prometheus (host execution) | `http://localhost:8085/actuator/prometheus` |
 
 Health details are hidden. Liveness is independent of PostgreSQL; readiness returns HTTP `503`
 when the database is unavailable.
+
+## Observability
+
+Inventory exports Prometheus metrics, writes ECS JSON logs to stdout, and instruments HTTP,
+Kafka, JDBC connections/queries and idempotency cleanup with Micrometer observations and
+OpenTelemetry tracing. The specification is in `.specs/observability/`.
+
+Management serves only health and Prometheus on a separate port. Host execution binds it to
+loopback. Compose binds management inside the container without publishing it on the host:
+
+```bash
+docker compose exec --no-TTY inventory \
+  curl --fail --silent --show-error http://localhost:8085/actuator/prometheus
+```
+
+Application probes stay on port 8080. Readiness depends on PostgreSQL; neither Kafka nor telemetry
+collectors become readiness dependencies. The shared Grafana/Prometheus/Loki/Tempo/Alloy stack
+belongs to Common and is not included in this repository's Compose deployment.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MANAGEMENT_SERVER_PORT` | `8085` | Separate internal management listener |
+| `MANAGEMENT_SERVER_ADDRESS` | `127.0.0.1` | Host binding; Compose overrides to `0.0.0.0` |
+| `OBSERVABILITY_ENVIRONMENT` | `local` | Bounded environment identity |
+| `OBSERVABILITY_INSTANCE` | `HOSTNAME`, then `standalone` | Runtime instance for logs and traces |
+| `TRACING_EXPORT_ENABLED` | `false` | Enable asynchronous OTLP trace export |
+| `TRACING_OTLP_ENDPOINT` | `http://localhost:4318/v1/traces` | Complete Alloy OTLP HTTP/protobuf endpoint |
+| `TRACING_SAMPLING_PROBABILITY` | `0.1`; `1.0` with `local` profile | Parent-based sampling probability |
+| `INVENTORY_KAFKA_CLUSTER_ID` | `unknown` | Deployment cluster ID; avoids observation-triggered broker discovery |
+| `INVENTORY_IDEMPOTENCY_CLEANUP_BACKLOG_REFRESH_DELAY` | `60s` | Independent backlog measurement interval |
+
+For host development use `SPRING_PROFILES_ACTIVE=local` for full sampling; enable export only
+when Alloy is available. Restrict the management listener
+with private networking, firewall/ingress rules and TLS outside local development.
+
+HTTP latency histograms use route templates. Standard JVM/process/Hikari/Kafka client meters
+remain available. Custom metrics retain their Micrometer names, converted to Prometheus naming
+on scrape (dots become underscores; timers use seconds and counters have `_total` suffixes):
+
+| Meter | Meaning |
+| --- | --- |
+| `inventory.idempotency.requests{outcome}` | `attempt`, `replay`, `mismatch`, `busy`; attempts include later rollbacks |
+| `inventory.reservation.cancellation.records{outcome}` | Listener invocations (`received`, including retries), committed `released`/`already_available`/`duplicate`, scheduled `retry`, confirmed `dead_letter`, failed `dead_letter_publish_failure` |
+| `inventory.reservation.cancellation.completion.delay` | `occurredAt` to committed release/already-available; excludes duplicates/failures/future timestamps |
+| `inventory.reservation.cancellation.clock.skew` | Successful nonduplicate events with future `occurredAt`; processing still succeeds |
+| `inventory.idempotency.cleanup.deleted` / `.failures` / `.duration` | Committed chunk deletions, failed deletion runs, total run duration |
+| `inventory.idempotency.cleanup.expired.backlog` | Last background count; `NaN` before the first successful measurement |
+| `inventory.idempotency.cleanup.backlog.last.success.timestamp` | Epoch seconds of the last successful count; zero means unknown |
+| `inventory.idempotency.cleanup.backlog.refresh.failures` | Failed measurements; prior count and timestamp remain unchanged |
+| `inventory.idempotency.cleanup.last.run.timestamp` / `.last.success.timestamp` | Epoch seconds of worker start and successful deletion completion; zero means no run/success |
+
+Backlog counting has a five-second database query timeout and does not run on scrape. Daily
+deletion remains at 03:00 UTC with the existing transaction/chunk/budget rules. Measurement
+failure is separate from deletion failure. Backlog is database-wide; do not sum its values across
+Inventory instances. Sum per-instance deletion/outcome counters when computing throughput.
+
+Logs contain `service.name`, `service.environment`, `service.node.name`, `traceId` and `spanId`
+when an observation is active. Cancellation results produce one INFO record with `eventId`,
+`outcome`, `sourceTopic`, `partition` and `offset`; retries and recovery failures add bounded
+failure metadata. Exception types/frames remain available, but messages, raw request URLs,
+bodies, SQL text/parameters and unrestricted MDC fields are excluded. SQL error/configuration
+loggers that could print sensitive values are disabled. These logs are diagnostics, not a durable
+audit trail.
+
+Tracing uses validated W3C `traceparent`/`tracestate`, with baggage excluded. Missing or malformed
+headers never reject a cancellation. DLT records retain their exact key/value/partition and
+diagnostic headers, plus valid tracing context. Retries share the originating trace and DLT
+publication has its own producer span. Reservation must separately preserve context in its
+durable outbox for producer-restart correlation. JDBC spans retain timing and datasource identity
+without SQL text/values. Export uses a bounded 2048-span queue, 512-span batches, and two-second
+connection/call timeouts; overload drops telemetry rather than blocking business processing.
 
 ## API Examples
 

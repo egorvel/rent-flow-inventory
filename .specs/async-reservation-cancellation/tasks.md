@@ -311,7 +311,7 @@ AC4.1-AC4.4, AC4.6-AC4.7; `design.md` §1.3, §2, §4.1-§4.2, §4.6,
 - DLT assertions compare the original key/value bytes exactly and find only one copy of each
   supported header: source topic/partition/offset, consumer group, failure code, failed-at, and a
   normalized event ID only when parseable. No exception header, message, stack trace, Java type
-  header, or accumulated original source header is present.
+  header, or accumulated original source header is present, except valid W3C traceparent/tracestate as specified in ../observability/design.md §4.
 - Log capture proves successful DLT publication emits one structured error diagnostic with
   bounded source metadata, category, and optional event ID but never the key, value, payload,
   exception message, SQL detail, or credentials. Any separate unexpected-exception stack-trace

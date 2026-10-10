@@ -34,7 +34,7 @@ serial number happens to be `history` or another collection-like term.
 | Component boundary | `InventoryHistoryController` owns the history HTTP collection while the existing `InventoryService` owns both transition and history-list use cases. |
 | Rule ownership | `InventoryStatus` owns the exhaustive `canTransitionTo` matrix. |
 | Reservation availability | `AVAILABLE` is the only state from which the dedicated endpoint can claim an item as `RESERVED`; the item row lock serializes competing claims so at most one succeeds. |
-| Post-rental availability | `RENTED` must move to `INSPECTION_REQUIRED`; availability returns only after inspection passes directly or after required maintenance completes. |
+| Post-rental availability | The dedicated endpoint permits only `RENTED` to `INSPECTION_REQUIRED`, then the inspection/maintenance pairs in §3.1. The caller verifies inspection success or maintenance completion before requesting `AVAILABLE`. |
 | Partial matching | PostgreSQL `LIKE` implements case-sensitive literal substring matching; no `pg_trgm` extension is introduced. |
 
 ### 1.3 Component flow
@@ -230,9 +230,11 @@ The matrix also defines the availability invariant for reservation and rental wo
   `RESERVED` to `RENTED`. `AVAILABLE` to `RENTED` remains permitted for an immediate rental without
   a prior reservation.
 - `RENTED` has exactly one permitted target, `INSPECTION_REQUIRED`, so it cannot return directly to
-  `AVAILABLE`. A passed inspection may use `INSPECTION_REQUIRED` to `AVAILABLE`; repair uses
-  `INSPECTION_REQUIRED` to `UNDER_MAINTENANCE` and then `UNDER_MAINTENANCE` to `AVAILABLE` after
-  completion. Either assessment stage may choose its permitted transition to `RETIRED`.
+  `AVAILABLE`. `INSPECTION_REQUIRED` permits `AVAILABLE`, `UNDER_MAINTENANCE`, or `RETIRED`;
+  `UNDER_MAINTENANCE` permits `AVAILABLE` or `RETIRED`. All other targets, including same-state
+  targets, are rejected. The calling workflow verifies inspection success or maintenance completion
+  before requesting `AVAILABLE`. Inventory receives only serial numbers and target statuses; it
+  does not store inspection results, maintenance records, or completion evidence.
 
 This service stores lifecycle state rather than reservation identity or reservation records. The
 system-wide one-active-reservation rule therefore requires the reservation workflow to use this
@@ -489,9 +491,9 @@ service-to-repository, converter-to-DTO/model, and repository-to-model direction
 8. Through the dedicated lifecycle endpoint, only an `AVAILABLE` item can be claimed as
    `RESERVED`, and serialized row locking permits at most one competing reservation claim to
    succeed.
-9. A completed rental cannot make an item immediately `AVAILABLE`: `RENTED` must move to
-   `INSPECTION_REQUIRED`, followed by successful inspection or any required maintenance before
-   availability returns.
+9. The dedicated endpoint rejects `RENTED` to `AVAILABLE`; it permits only `RENTED` to
+   `INSPECTION_REQUIRED`. Subsequent inspection/maintenance transitions follow §3.1's status
+   pairs. Verification of inspection success or maintenance completion belongs to the caller.
 
 ### 7.2 Edge-case outcomes
 
@@ -601,7 +603,18 @@ README and OpenAPI describe all headers and errors. Clients generate a UUID per 
 
 AC7.1–AC7.4: Schedule once daily at 03:00 UTC with configurable cron (`inventory.idempotency.cleanup.cron`). Each separate transaction deletes at most 1000 expired records through a CTE selecting keys ordered by expiry with `FOR UPDATE SKIP LOCKED`. Continue after full chunks only while the configurable 60-second runtime budget remains; an already-running chunk may finish after that budget. Row locks coordinate cleanup with request reuse; multiple instances can safely run cleanup concurrently. Cleanup failure ends that run and is counted/logged without request identifiers.
 
-Expiry is checked on every request, so cleanup delays do not extend the guarantee. Daily cleanup can leave expired rows for roughly another day, or longer during backlog/failure. Keep history untouched. Expose bounded-label attempt/replay/mismatch/busy counters, deleted records, cleanup failures/duration and last observed expired backlog (initially zero, refreshed after successful cleanup). Attempt counters count executions started, including later rollbacks. No Redis, generic interceptor, or separate committed in-progress transaction is introduced.
+Expiry is checked on every request, so cleanup delays do not extend the guarantee. Daily cleanup
+can leave expired rows for roughly another day, or longer during backlog or failure. Keep history
+untouched.
+
+Expose bounded-label attempt, replay, mismatch and busy counters, deleted-record and cleanup-failure
+counters, cleanup duration and the last measured expired backlog. Attempt counters count executions
+started, including later rollbacks.
+
+The expired-backlog gauge reports `NaN` until the first successful measurement. A separate scheduled
+task refreshes it on a 60-second fixed delay, independently of daily deletion. Expose measurement
+freshness and refresh-failure signals as defined in the [observability design](../observability/design.md#5-cleanup-monitoring),
+§5. No Redis, generic interceptor, or separate committed in-progress transaction is introduced.
 
 ## 10. Requirements traceability
 

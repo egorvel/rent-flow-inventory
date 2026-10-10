@@ -5,6 +5,8 @@ import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.context.MessageSourceResolvable;
 import org.springframework.http.HttpHeaders;
@@ -38,6 +40,7 @@ import tools.jackson.databind.exc.InvalidFormatException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
+    private static final Logger LOGGER = LoggerFactory.getLogger(ApiExceptionHandler.class);
 
     private static final Comparator<ViolationResponse> VIOLATION_ORDER =
             Comparator.comparing(ViolationResponse::field).thenComparing(ViolationResponse::message);
@@ -237,15 +240,16 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(Exception.class)
     ResponseEntity<ProblemResponse> handleUnexpected(Exception exception, WebRequest request) {
         HttpServletRequest servletRequest = ((ServletWebRequest) request).getRequest();
-        logger.error(
-                "Unexpected failure handling "
-                        + servletRequest.getMethod()
-                        + " "
-                        + servletRequest.getRequestURI()
-                        + " ("
-                        + exception.getClass().getName()
-                        + ")",
-                exception);
+        Object route = servletRequest.getAttribute(
+                org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        LOGGER.atError()
+                .addKeyValue("method", servletRequest.getMethod())
+                .addKeyValue("route", route instanceof String pattern ? pattern : "unmatched")
+                .addKeyValue("exceptionType", exception.getClass().getName())
+                .addKeyValue(
+                        "error.stack_trace",
+                        new com.rentflow.util.SafeStackTracePrinter().printStackTraceToString(exception))
+                .log("Unexpected failure handling request");
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
                 .body(internalError(request));

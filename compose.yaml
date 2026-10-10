@@ -24,6 +24,8 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      MANAGEMENT_SERVER_ADDRESS: 0.0.0.0
+      SPRING_PROFILES_ACTIVE: local
       SPRING_DATASOURCE_URL: jdbc:postgresql://rentflow-postgres:5432/${POSTGRES_DB:-rentflow}
       SPRING_DATASOURCE_USERNAME: ${INVENTORY_DB_USER:-inventory}
       SPRING_DATASOURCE_PASSWORD: ${INVENTORY_DB_PASSWORD:-inventory-local}

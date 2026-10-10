@@ -4,11 +4,13 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 
 import com.rentflow.model.InventoryStatusTransitionRequest;
 
@@ -40,5 +42,6 @@ public interface InventoryStatusTransitionRequestRepository
             value =
                     "SELECT count(*) FROM inventory.inventory_status_transition_requests WHERE expires_at <= statement_timestamp()",
             nativeQuery = true)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.query.timeout", value = "5000"))
     long countExpired();
 }

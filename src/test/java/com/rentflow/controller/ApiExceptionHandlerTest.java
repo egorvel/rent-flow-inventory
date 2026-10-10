@@ -128,15 +128,16 @@ class ApiExceptionHandlerTest {
     }
 
     @Test
-    void logsUnexpectedFailuresWithTheCompleteStackTrace(CapturedOutput output) {
+    void logsUnexpectedFailuresWithSafeStackFrames(CapturedOutput output) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/inventory/DRILL-001");
 
         handler.handleUnexpected(new IllegalStateException("boom"), new ServletWebRequest(request));
 
         assertThat(output)
-                .contains("Unexpected failure handling GET /api/v1/inventory/DRILL-001")
-                .contains("java.lang.IllegalStateException: boom")
+                .contains("Unexpected failure handling request")
+                .doesNotContain("DRILL-001", "boom")
+                .contains("java.lang.IllegalStateException")
                 .contains(
-                        "at com.rentflow.controller.ApiExceptionHandlerTest.logsUnexpectedFailuresWithTheCompleteStackTrace");
+                        "at com.rentflow.controller.ApiExceptionHandlerTest.logsUnexpectedFailuresWithSafeStackFrames");
     }
 }

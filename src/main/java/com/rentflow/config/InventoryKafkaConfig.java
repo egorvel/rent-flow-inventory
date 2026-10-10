@@ -19,11 +19,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.kafka.autoconfigure.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.config.TopicBuilder;
+import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
@@ -34,6 +37,7 @@ import com.rentflow.converter.ReservationCancellationEventConverter;
 import com.rentflow.model.ReservationCancellationFailureCode;
 import com.rentflow.model.ReservationCancellationProcessingException;
 import com.rentflow.model.ReservationCancellationRejectedException;
+import com.rentflow.util.KafkaTraceHeaders;
 
 import io.micrometer.core.instrument.MeterRegistry;
 
@@ -51,6 +55,20 @@ public class InventoryKafkaConfig {
             "rentflow.dlt.failure-code",
             "rentflow.dlt.failed-at",
             "rentflow.dlt.event-id");
+
+    @Bean
+    ConcurrentKafkaListenerContainerFactory<Object, Object> kafkaListenerContainerFactory(
+            ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
+            ConsumerFactory<Object, Object> consumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<Object, Object> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        configurer.configure(factory, consumerFactory);
+        factory.setRecordInterceptor((record, _) -> {
+            KafkaTraceHeaders.normalize(record.headers());
+            return record;
+        });
+        return factory;
+    }
 
     @Bean
     DefaultErrorHandler reservationCancellationErrorHandler(
@@ -78,6 +96,19 @@ public class InventoryKafkaConfig {
                 if (deliveryAttempt < retry.maxAttempts()
                         && !hasCause(exception, ReservationCancellationRejectedException.class)) {
                     count(metrics, "retry");
+                    LOGGER.atWarn()
+                            .addKeyValue("outcome", "retry")
+                            .addKeyValue("sourceTopic", record.topic())
+                            .addKeyValue("partition", record.partition())
+                            .addKeyValue("offset", record.offset())
+                            .addKeyValue("deliveryAttempt", deliveryAttempt)
+                            .addKeyValue("failureCode", "TRANSIENT_PROCESSING_FAILURE")
+                            .addKeyValue(
+                                    "eventId",
+                                    eventId(exception, record.value(), converter)
+                                            .map(UUID::toString)
+                                            .orElse("unavailable"))
+                            .log("Reservation cancellation retry scheduled");
                 }
             }
 
@@ -86,18 +117,32 @@ public class InventoryKafkaConfig {
                 count(metrics, "dead_letter");
                 ReservationCancellationFailureCode failureCode = failureCode(exception);
                 Optional<UUID> eventId = eventId(exception, record.value(), converter);
-                LOGGER.error(
-                        "Reservation cancellation sent to DLT: sourceTopic={}, partition={}, offset={}, failureCode={}, eventId={}",
-                        record.topic(),
-                        record.partition(),
-                        record.offset(),
-                        failureCode,
-                        eventId.map(UUID::toString).orElse("unavailable"));
+                LOGGER.atError()
+                        .addKeyValue("outcome", "dead_letter")
+                        .addKeyValue("sourceTopic", record.topic())
+                        .addKeyValue("partition", record.partition())
+                        .addKeyValue("offset", record.offset())
+                        .addKeyValue("failureCode", failureCode.name())
+                        .addKeyValue("eventId", eventId.map(UUID::toString).orElse("unavailable"))
+                        .log("Reservation cancellation sent to DLT");
             }
 
             @Override
             public void recoveryFailed(ConsumerRecord<?, ?> record, Exception original, Exception recoveryFailure) {
                 count(metrics, "dead_letter_publish_failure");
+                LOGGER.atError()
+                        .addKeyValue("outcome", "dead_letter_publish_failure")
+                        .addKeyValue("sourceTopic", record.topic())
+                        .addKeyValue("partition", record.partition())
+                        .addKeyValue("offset", record.offset())
+                        .addKeyValue("failureCode", failureCode(original).name())
+                        .addKeyValue(
+                                "eventId",
+                                eventId(original, record.value(), converter)
+                                        .map(UUID::toString)
+                                        .orElse("unavailable"))
+                        .addKeyValue("exceptionType", recoveryFailure.getClass().getName())
+                        .log("Reservation cancellation DLT publication failed");
             }
         });
         return errorHandler;
@@ -190,6 +235,8 @@ public class InventoryKafkaConfig {
                     headers.add(new RecordHeader(header.key(), header.value()));
                 }
             }
+            // The observed template injects the DLT producer context in the listener scope.
+            // Copying the source context here would accumulate duplicate propagation headers.
             return new ProducerRecord<>(deadLetterTopic, topicPartition.partition(), key, value, headers);
         }
     }

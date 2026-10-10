@@ -271,9 +271,13 @@ AC5.1-AC5.4; `design.md` §2.1-§2.4, §3.1-§3.4, §4, §5, §6-§8, §10.
 - Matrix and concurrency assertions prove `AVAILABLE` is the only source that can become
   `RESERVED`, only one competing reservation claim succeeds, cancellation permits
   `RESERVED` to `AVAILABLE`, and direct `AVAILABLE` to `RENTED` remains permitted. Post-rental
-  assertions prove `RENTED` can move only to `INSPECTION_REQUIRED` and availability returns only
-  after a passing inspection or completed maintenance; inspection and maintenance retain their
-  permitted retirement paths.
+  assertions in `InventoryStatusTest` and `InventoryIT.enforcesEveryDedicatedStatusTransition`
+  prove `RENTED` permits only `INSPECTION_REQUIRED`; `INSPECTION_REQUIRED` permits exactly
+  `AVAILABLE`, `UNDER_MAINTENANCE`, and `RETIRED`; and `UNDER_MAINTENANCE` permits exactly
+  `AVAILABLE` and `RETIRED`. For those sources, every other target returns `409`, leaves the item
+  unchanged, and creates no history; allowed targets return `204` with the documented item/history
+  effect. Inspection results and maintenance-completion evidence remain the caller's responsibility
+  and are not claimed by these matrix tests.
 - A batch mixing valid, missing, same-status, and forbidden entries returns `409` and every failed
   entry exactly once in original index order, with exact serial, requested status, code, and
   message. Valid entries do not appear in `failedItems`; every item and all history stay unchanged.
@@ -318,7 +322,7 @@ aggregate-failure, mixed-status, and validation-precedence assertions respective
 | AC1.6 | T2: missing locked lookup asserts `404`, no upsert, and no history |
 | AC1.7-AC1.8 | T2: body/media/path rejection matrix asserts documented `400`/`415` and no history |
 | AC1.13-AC1.15 | T5: exhaustive matrix and concurrency tests assert the single reservation availability gate, cancellation release, and direct rental path |
-| AC1.16-AC1.17 | T5: exhaustive matrix tests assert mandatory post-rental inspection and availability only after inspection or maintenance, with retirement paths retained |
+| AC1.16-AC1.17 | T5: enum and HTTP tests assert exact permitted targets from `RENTED`, `INSPECTION_REQUIRED`, and `UNDER_MAINTENANCE`, plus `409` with no item/history change for every forbidden target; external completion checks belong to the caller |
 | AC2.1 | T2: successful transition asserts exactly one row with all four required business values |
 | AC2.2 | T2: transaction and persistence-failure tests assert item/history all-or-nothing behavior |
 | AC2.3 | T2: every rejected and failed request asserts no history insert |

@@ -38,12 +38,13 @@ returns the item from `RESERVED` to `AVAILABLE`, while fulfilling it moves the i
 A direct `AVAILABLE` to `RENTED` transition remains permitted for rentals that do not first create
 a reservation.
 
-An item does not become available immediately after a rental. `RENTED` can transition only to
-`INSPECTION_REQUIRED`. A passing inspection returns the item to `AVAILABLE`; an item needing work
-moves to `UNDER_MAINTENANCE` and becomes `AVAILABLE` only after maintenance completes. Inspection
-or maintenance may instead retire an item that should no longer be rented. These guarantees apply
-to the dedicated lifecycle endpoint; the existing full-replacement endpoint remains outside the
-lifecycle workflow as described in US4.
+The dedicated lifecycle endpoint does not permit a direct `RENTED`-to-`AVAILABLE` transition.
+`RENTED` can transition only to `INSPECTION_REQUIRED`. From there, the endpoint permits
+`AVAILABLE`, `UNDER_MAINTENANCE`, or `RETIRED`; from `UNDER_MAINTENANCE`, it permits `AVAILABLE`
+or `RETIRED`. The calling workflow is responsible for confirming a passing inspection or completed
+maintenance before requesting renewed availability. Inventory stores lifecycle status and enforces
+the matrix; it does not record or verify inspection results or maintenance completion. The existing
+full-replacement endpoint remains outside this lifecycle enforcement as described in US4.
 
 Every successful transition through the dedicated endpoint creates an immutable history record in
 an Inventory-owned database table. Each record contains the item's serial number, the status
@@ -122,10 +123,10 @@ endpoint so that the whole operation succeeds only when every equipment-state pr
 - **AC1.16 (State-driven):** While an item is `RENTED`, the inventory service shall permit only
   `INSPECTION_REQUIRED` as its next status through the dedicated lifecycle endpoint and shall not
   permit it to become `AVAILABLE` directly.
-- **AC1.17 (Event-driven):** When post-rental inspection or maintenance completes, the inventory
-  service shall permit the item to become `AVAILABLE` only from `INSPECTION_REQUIRED` after a
-  passing inspection or from `UNDER_MAINTENANCE` after completed maintenance; inspection and
-  maintenance shall also permit retirement instead of renewed availability.
+- **AC1.17 (Event-driven):** When a client requests a dedicated lifecycle transition for an item
+  in `INSPECTION_REQUIRED` or `UNDER_MAINTENANCE`, the inventory service shall permit only
+  `AVAILABLE`, `UNDER_MAINTENANCE`, or `RETIRED` from `INSPECTION_REQUIRED`, and only `AVAILABLE`
+  or `RETIRED` from `UNDER_MAINTENANCE`.
 
 ### US2 - Retain an audit trail of dedicated status transitions
 
@@ -330,8 +331,9 @@ For US1–US2 and AC5.1, lifecycle evaluation and new history apply to new attem
     active claim. Cancellation returns `RESERVED` to `AVAILABLE`; fulfillment moves it to
     `RENTED`; direct `AVAILABLE` to `RENTED` remains permitted. See AC1.13–AC1.15 and `design.md`
     §3.1.
-27. **Post-rental availability:** A rented item must move to `INSPECTION_REQUIRED` and cannot
-    become available directly. It becomes `AVAILABLE` after passing inspection, or after required
-    maintenance completes; inspection or maintenance may retire it instead. The full-replacement
-    endpoint remains outside this lifecycle enforcement. See AC1.16–AC1.17 and `design.md` §3.1,
-    §3.2, and §7.1.
+27. **Post-rental availability:** The dedicated endpoint requires `RENTED` to move to
+    `INSPECTION_REQUIRED` before renewed availability and permits the inspection/maintenance
+    paths in AC1.17, including retirement. The calling workflow confirms inspection success or
+    maintenance completion; Inventory enforces status pairs without storing or checking those
+    external facts. The full-replacement endpoint remains outside this lifecycle enforcement.
+    See AC1.16–AC1.17 and `design.md` §3.1, §3.2, and §7.1.

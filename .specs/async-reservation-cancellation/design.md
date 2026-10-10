@@ -523,7 +523,7 @@ The DLT contains these stable UTF-8 headers exactly once:
 | `rentflow.dlt.event-id` | Normalized UUID only when it was parseable |
 
 A custom header-name/header function replaces framework exception headers. No exception class,
-message, serialized exception, or stack trace is written to Kafka. Existing headers from the
+message, serialized exception, or stack trace is written to Kafka. Valid W3C traceparent/tracestate are permitted for correlation (see ../observability/design.md §4). Other existing headers from the
 source record are not copied, preventing unbounded growth during repeated recovery; the stable
 fields above contain all supported recovery metadata.
 
@@ -532,7 +532,7 @@ The recoverer reads a parseable event ID from the typed rejection/retry wrapper 
 `eventId` JSON member for the header and log; failure to extract it yields no event-ID header and
 never changes the record's failure classification.
 
-An error log is emitted only after DLT publication succeeds. It contains the topic, partition,
+The dead_letter result error log is emitted only after DLT publication succeeds. A distinct dead_letter_publish_failure diagnostic is emitted on failed publication. It contains the topic, partition,
 offset, failure code, and event ID when available, but not the key, value, or exception message.
 For an unexpected exhausted exception, a separate diagnostic may include its stack trace, but it
 must not add the Kafka key or value; the original record payload is never interpolated into either
@@ -736,9 +736,8 @@ The suite proves:
 - a controlled transient failure succeeds on a later attempt with only its final database effect,
   while five failures produce one confirmed DLT result;
 - unavailable DLT publication leaves the source offset uncommitted and succeeds after recovery;
-- DLT records preserve key/value bytes and contain only the bounded stable headers; and
-- application restart with the same group and database neither skips an uncommitted event nor
-  repeats a committed database effect.
+- DLT records preserve key/value bytes and contain only the bounded stable diagnostic headers and valid W3C traceparent/tracestate; 
+- application restarts with the same group, and the database neither skips an uncommitted event nor repeats a committed database effect.
 
 The Kafka tests use bounded polling and deterministic short test overrides for backoff; they do not
 increase production timeouts to hide failures. Existing HTTP, history, idempotency, migration,

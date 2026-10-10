@@ -499,7 +499,7 @@ rentflow.inventory.reservation-cancellation.dlt.v1
 The DLT record uses the same partition number as the source record. Therefore the DLT has the same
 three-partition count as the source topic.
 
-Only these stable UTF-8 headers are added:
+These stable UTF-8 diagnostic headers are added:
 
 | Header | Content |
 | --- | --- |
@@ -514,6 +514,10 @@ Only these stable UTF-8 headers are added:
 The custom recoverer deliberately removes framework exception headers and does not copy arbitrary
 source headers. This prevents exception messages, stack traces, and repeated recovery metadata from
 causing unbounded or sensitive headers.
+
+The observed Kafka template also adds valid W3C `traceparent`/`tracestate` for the DLT producer
+span within the originating trace. Baggage and arbitrary source headers are excluded. See the
+observability section in `README.md` for the trace and log contract.
 
 The error log includes source topic, partition, offset, failure code, and optional event ID. It does
 not include the original key or payload.

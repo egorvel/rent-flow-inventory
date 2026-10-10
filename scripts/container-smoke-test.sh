@@ -59,6 +59,7 @@ wait_for_http_status() {
     local expected_status="$1"
     local url="$2"
     local max_attempts="$3"
+    local request_timeout="${4:-2}"
     local attempt=1
     local actual_status
 
@@ -67,7 +68,7 @@ wait_for_http_status() {
             --silent \
             --output /dev/null \
             --write-out '%{http_code}' \
-            --max-time 2 \
+            --max-time "$request_timeout" \
             "$url" 2>/dev/null || true)"
         if [[ "$actual_status" == "$expected_status" ]]; then
             return
@@ -76,7 +77,7 @@ wait_for_http_status() {
         attempt=$((attempt + 1))
     done
 
-    fail "$url did not return HTTP $expected_status within ${max_attempts}s"
+    fail "$url did not return HTTP $expected_status after ${max_attempts} attempts"
 }
 
 assert_http_status() {
@@ -220,6 +221,17 @@ compose up --detach inventory
 wait_for_service_health inventory 120
 assert_runtime_image
 
+info "Checking private management, Prometheus metrics and JSON logs"
+assert_http_status 404 "${BASE_URL}/actuator/prometheus"
+management_metrics="$(compose exec --no-TTY inventory curl --fail --silent --show-error --max-time 5 http://localhost:8085/actuator/prometheus)"
+[[ "$management_metrics" == *"jvm_memory_used_bytes"* ]] || fail "Prometheus JVM metrics missing"
+[[ "$management_metrics" == *"hikaricp_connections"* ]] || fail "Prometheus connection pool metrics missing"
+inventory_container="$(compose ps --quiet inventory)"
+management_host_port="$(docker inspect --format '{{range (index .NetworkSettings.Ports "8085/tcp")}}{{.HostPort}}{{end}}' "$inventory_container")"
+[[ -z "$management_host_port" ]] || fail "Management port must not be published on the host"
+inventory_logs="$(compose logs --no-color inventory)"
+[[ "$inventory_logs" == *'"service":{"name":"rent-flow-inventory"'* ]] || fail "ECS service identity missing from logs"
+
 info "Creating and retrieving an inventory item"
 create_item
 assert_item_readable
@@ -231,7 +243,10 @@ assert_item_readable
 
 info "Stopping PostgreSQL and checking independent liveness"
 compose stop rentflow-postgres
-wait_for_http_status 503 "${BASE_URL}/readyz" 30
+# A DB-backed readiness request may wait for Hikari's default 30-second acquisition timeout.
+# Let that response complete so an unavailable database must produce 503, rather than accepting
+# a client-side timeout. Liveness still uses the separate two-second deadline below.
+wait_for_http_status 503 "${BASE_URL}/readyz" 3 40
 assert_http_status 200 "${BASE_URL}/livez"
 
 info "Restarting PostgreSQL and checking readiness recovery"

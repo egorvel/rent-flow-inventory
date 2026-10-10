@@ -39,7 +39,7 @@ COPY --from=build --chown=10001:10001 /workspace/target/inventory.jar /opt/inven
 
 USER 10001:10001
 
-EXPOSE 8080
+EXPOSE 8080 8085
 
 HEALTHCHECK --interval=5s --timeout=3s --start-period=30s --retries=5 \
     CMD ["curl", "--fail", "--silent", "--show-error", "--max-time", "2", "http://localhost:8080/readyz"]

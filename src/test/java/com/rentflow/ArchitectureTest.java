@@ -60,7 +60,7 @@ class ArchitectureTest {
                 .optionalLayer("Util")
                 .definedBy("..util..")
                 .whereLayer("Controller")
-                .mayOnlyAccessLayers("Converter", "Dto", "Model", "Service")
+                .mayOnlyAccessLayers("Converter", "Dto", "Model", "Service", "Util")
                 .whereLayer("Converter")
                 .mayOnlyAccessLayers("Dto", "Model", "Util")
                 .whereLayer("Dto")
@@ -72,7 +72,7 @@ class ArchitectureTest {
                 .whereLayer("Model")
                 .mayNotAccessAnyLayer()
                 .whereLayer("Config")
-                .mayOnlyAccessLayers("Converter", "Dto", "Model")
+                .mayOnlyAccessLayers("Converter", "Dto", "Model", "Util")
                 .whereLayer("Util")
                 .mayNotAccessAnyLayer()
                 .check(PRODUCTION_CLASSES);

@@ -1,4 +1,6 @@
 spring:
+  main:
+    banner-mode: "off"
   application:
     name: rent-flow-inventory
   jackson:
@@ -18,6 +20,10 @@ spring:
   sql:
     init:
       mode: never
+  task:
+    scheduling:
+      pool:
+        size: 2
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -33,12 +39,16 @@ spring:
       properties:
         enable.idempotence: true
     listener:
+      observation-enabled: true
       ack-mode: record
       concurrency: ${INVENTORY_CANCELLATION_CONCURRENCY:3}
       missing-topics-fatal: false
+    template:
+      observation-enabled: true
 
 inventory:
   kafka:
+    cluster-id: ${INVENTORY_KAFKA_CLUSTER_ID:unknown}
     reservation-cancellation:
       topic: ${INVENTORY_CANCELLATION_TOPIC:rentflow.reservation.cancelled.v1}
       dead-letter-topic: ${INVENTORY_CANCELLATION_DLT:rentflow.inventory.reservation-cancellation.dlt.v1}
@@ -53,10 +63,53 @@ springdoc:
   paths-to-match: /api/v1/**
 
 management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:8085}
+    address: ${MANAGEMENT_SERVER_ADDRESS:127.0.0.1}
+  metrics:
+    tags:
+      service: ${spring.application.name}
+      environment: ${OBSERVABILITY_ENVIRONMENT:local}
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        inventory.reservation.cancellation.completion.delay: true
+      minimum-expected-value:
+        http.server.requests: 1ms
+        inventory.reservation.cancellation.completion.delay: 1ms
+      maximum-expected-value:
+        http.server.requests: 10s
+        inventory.reservation.cancellation.completion.delay: 7d
+  tracing:
+    propagation:
+      type: w3c
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:0.1}
+    export:
+      otlp:
+        enabled: ${TRACING_EXPORT_ENABLED:false}
+  logging:
+    export:
+      otlp:
+        enabled: false
+  opentelemetry:
+    resource-attributes:
+      service.name: ${spring.application.name}
+      deployment.environment.name: ${OBSERVABILITY_ENVIRONMENT:local}
+      service.instance.id: ${OBSERVABILITY_INSTANCE:${HOSTNAME:standalone}}
+    tracing:
+      export:
+        max-queue-size: 2048
+        max-batch-size: 512
+        otlp:
+          transport: http
+          endpoint: ${TRACING_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+          connect-timeout: 2s
+          timeout: 2s
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,prometheus
   endpoint:
     health:
       probes:
@@ -68,3 +121,45 @@ management:
         readiness:
           include: readinessState,db
       show-details: never
+
+logging:
+  level:
+    org.hibernate.orm.jdbc.error: "off"
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: "off"
+    org.apache.kafka.clients.consumer.ConsumerConfig: "off"
+    org.apache.kafka.clients.producer.ProducerConfig: "off"
+    org.apache.kafka.clients.admin.AdminClientConfig: "off"
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        environment: ${OBSERVABILITY_ENVIRONMENT:local}
+        node-name: ${OBSERVABILITY_INSTANCE:${HOSTNAME:standalone}}
+    json:
+      customizer: com.rentflow.util.SafeLogMembersCustomizer
+      stacktrace:
+        printer: com.rentflow.util.SafeStackTracePrinter
+
+jdbc:
+  includes: connection,query
+  hikari:
+    enabled: false
+  resultset-operations:
+    enabled: false
+  datasource-proxy:
+    include-parameter-values: false
+    query:
+      enable-logging: false
+    slow-query:
+      enable-logging: false
+
+---
+spring:
+  config:
+    activate:
+      on-profile: local
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
