@@ -51,8 +51,6 @@ import org.springframework.util.backoff.BackOffExecution;
 import com.rentflow.converter.ReservationCancellationEventConverter;
 import com.rentflow.model.ReservationCancellationFailureCode;
 import com.rentflow.model.ReservationCancellationRejectedException;
-import com.rentflow.util.SafeLogMembersCustomizer;
-import com.rentflow.util.SafeStackTracePrinter;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -64,6 +62,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -101,8 +100,8 @@ class InventoryKafkaConfigTest {
     void captureConfiguredJsonLogs() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("spring.application.name", "rent-flow-inventory")
-                .withProperty("logging.structured.json.customizer", SafeLogMembersCustomizer.class.getName())
-                .withProperty("logging.structured.json.stacktrace.printer", SafeStackTracePrinter.class.getName());
+                .withProperty("logging.structured.json.stacktrace.max-length", "16384")
+                .withProperty("logging.structured.json.stacktrace.max-throwable-depth", "64");
         context = new LoggerContext();
         context.putObject(Environment.class.getName(), environment);
         encoder = new StructuredLogEncoder();
@@ -256,24 +255,24 @@ class InventoryKafkaConfigTest {
     }
 
     @Test
-    void serializesActualRecoveryCallbacksSafelyAndRestartsRetriesAfterPublicationFailure() {
+    void retainsRecoveryCauseMessagesWithoutDumpingRecordsAndRestartsRetriesAfterPublicationFailure() {
         configureDltProducer();
         AtomicBoolean failPublication = new AtomicBoolean(true);
         doAnswer(invocation -> failPublication.getAndSet(false)
-                        ? CompletableFuture.failedFuture(new IllegalStateException(PRIVATE_VALUE))
+                        ? CompletableFuture.failedFuture(new IllegalStateException("Broker acknowledgement timed out"))
                         : confirmedSend(invocation.getArgument(0)))
                 .when(template)
                 .send(any(ProducerRecord.class));
         DefaultErrorHandler handler = handler(2, Duration.ZERO, Duration.ZERO, 2);
-        assertThat(handler.handleOne(new IllegalArgumentException(PRIVATE_VALUE), record, null, null))
+        assertThat(handler.handleOne(new IllegalArgumentException("Processing failed"), record, null, null))
                 .isFalse();
-        assertThat(handler.handleOne(new IllegalArgumentException(PRIVATE_VALUE), record, null, null))
+        assertThat(handler.handleOne(new IllegalArgumentException("Processing failed"), record, null, null))
                 .isFalse();
         assertThat(counter("dead_letter_publish_failure")).isOne();
         assertThat(counter("dead_letter")).isZero();
-        assertThat(handler.handleOne(new IllegalArgumentException(PRIVATE_VALUE), record, null, null))
+        assertThat(handler.handleOne(new IllegalArgumentException("Processing failed"), record, null, null))
                 .isFalse();
-        assertThat(handler.handleOne(new IllegalArgumentException(PRIVATE_VALUE), record, null, null))
+        assertThat(handler.handleOne(new IllegalArgumentException("Processing failed"), record, null, null))
                 .isTrue();
         assertThat(counter("retry")).isEqualTo(2);
         assertThat(counter("dead_letter")).isOne();
@@ -281,18 +280,19 @@ class InventoryKafkaConfigTest {
             assertThat(log.path("log").path("level").asText()).isEqualTo("WARN");
             assertThat(log.path("deliveryAttempt").asInt()).isOne();
             assertThat(log.path("failureCode").asText()).isEqualTo("RETRYABLE_PROCESSING_FAILURE");
+            assertThat(log.path("error").path("message").asText()).isEqualTo("Processing failed");
         });
         assertThat(logs("dead_letter_publish_failure")).singleElement().satisfies(log -> {
             assertThat(log.path("log").path("level").asText()).isEqualTo("ERROR");
             assertThat(log.path("exceptionType").asText()).isEqualTo("org.springframework.kafka.KafkaException");
             assertThat(log.path("error").path("stack_trace").asText())
-                    .contains("IllegalStateException", "InventoryKafkaConfigTest");
-            assertThat(log.path("error").path("message").isMissingNode()).isTrue();
+                    .contains("IllegalStateException", "InventoryKafkaConfigTest", "Broker acknowledgement timed out");
+            assertThat(log.path("error").path("message").asText()).isNotBlank();
         });
-        assertThat(logs("dead_letter"))
-                .singleElement()
-                .satisfies(log ->
-                        assertThat(log.path("log").path("level").asText()).isEqualTo("ERROR"));
+        assertThat(logs("dead_letter")).singleElement().satisfies(log -> {
+            assertThat(log.path("log").path("level").asText()).isEqualTo("ERROR");
+            assertThat(log.path("error").path("message").asText()).isEqualTo("Processing failed");
+        });
         for (JsonNode log : logs(null)) {
             assertThat(log.path("eventId").asText()).isEqualTo(eventId.toString());
             assertThat(log.path("sourceTopic").asText()).isEqualTo("source");
@@ -302,6 +302,33 @@ class InventoryKafkaConfigTest {
             assertThat(log.path("spanId").asText()).isEqualTo(SPAN_ID);
         }
         assertThat(output.toString(StandardCharsets.UTF_8)).doesNotContain(PRIVATE_VALUE, "\"private\"");
+    }
+
+    @Test
+    void malformedRecordDiagnosticsDoNotEchoRawInputOrParserMessages() {
+        confirmDltPublication();
+        DefaultErrorHandler handler = handler(5, Duration.ZERO, Duration.ZERO, 2);
+        ConsumerRecord<byte[], byte[]> malformed = new ConsumerRecord<>(
+                "source",
+                0,
+                8L,
+                PRIVATE_VALUE.getBytes(StandardCharsets.UTF_8),
+                ("{\"unknown\":\"" + PRIVATE_VALUE + "\",broken").getBytes(StandardCharsets.UTF_8));
+        ReservationCancellationEventConverter converter = new ReservationCancellationEventConverter(4096);
+
+        assertThatThrownBy(() -> converter.convert(malformed))
+                .isInstanceOfSatisfying(ReservationCancellationRejectedException.class, exception -> {
+                    assertThat(exception.getCause()).isNull();
+                    assertThat(handler.handleOne(exception, malformed, null, null))
+                            .isTrue();
+                });
+        assertThat(logs("dead_letter")).singleElement().satisfies(log -> {
+            assertThat(log.path("failureCode").asText()).isEqualTo("INVALID_EVENT");
+            assertThat(log.path("error").path("type").asText())
+                    .isEqualTo(ReservationCancellationRejectedException.class.getName());
+        });
+        assertThat(output.toString(StandardCharsets.UTF_8)).doesNotContain(PRIVATE_VALUE, "unknown", "broken");
+        assertThat(counter("retry")).isZero();
     }
 
     private DefaultErrorHandler handler(int maxAttempts, Duration initial, Duration maximum, double multiplier) {

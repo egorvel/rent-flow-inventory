@@ -95,8 +95,8 @@ class ObservabilityIT extends PostgresIntegrationTest {
     }
 
     @Test
-    void propagatesHttpParentIntoDatabaseSpansAndExportsNoItemValues() throws Exception {
-        String serial = "TRACE-SENSITIVE-SERIAL";
+    void retainsHttpPathAndSqlWhileExcludingHeadersQueryStringsAndParameterValues() throws Exception {
+        String serial = "TRACE-DIAGNOSTIC-SERIAL";
         inventory.saveAndFlush(
                 new InventoryItem(serial, "Drill", "synthetic-private-value", InventoryStatus.AVAILABLE));
         tracerProvider.forceFlush().join(5, java.util.concurrent.TimeUnit.SECONDS);
@@ -114,12 +114,22 @@ class ObservabilityIT extends PostgresIntegrationTest {
         assertThat(spans).anySatisfy(span -> {
             assertThat(span.getKind()).isEqualTo(io.opentelemetry.api.trace.SpanKind.SERVER);
             assertThat(span.getParentSpanId()).isEqualTo("2222222222222222");
+            assertThat(span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("http.url")))
+                    .isEqualTo("/api/v1/inventory/" + serial);
         });
         assertThat(spans).anySatisfy(span -> assertThat(span.getName()).contains("connection"));
-        assertThat(spans).anySatisfy(span -> assertThat(span.getName()).contains("query"));
+        assertThat(spans).anySatisfy(span -> {
+            assertThat(span.getName()).contains("query");
+            assertThat(span.getAttributes().toString()).contains("jdbc.query", "inventory_item", "?");
+        });
         assertThat(spans).allSatisfy(span -> {
             assertThat(span.getAttributes().toString() + span.getEvents())
-                    .doesNotContain(serial, "synthetic-private-value", "jdbc.query", "jdbc.params", "url.full");
+                    .doesNotContain(
+                            "synthetic-private-value",
+                            "jdbc.params",
+                            "synthetic-header-value",
+                            "synthetic-cookie-value",
+                            "synthetic-baggage-value");
             assertThat(span.getResource()
                             .getAttribute(io.opentelemetry.api.common.AttributeKey.stringKey("service.name")))
                     .isEqualTo("rent-flow-inventory");
@@ -129,18 +139,91 @@ class ObservabilityIT extends PostgresIntegrationTest {
                         .timer()
                         .count())
                 .isPositive();
+        assertThat(get("local.management.port", "/actuator/prometheus", null).body())
+                .doesNotContain(serial);
+        assertThat(environment.getProperty("jdbc.datasource-proxy.include-parameter-values", Boolean.class))
+                .isFalse();
+        assertThat(environment.getProperty("management.tracing.baggage.enabled", Boolean.class))
+                .isFalse();
     }
 
     @Test
-    void failingSqlKeepsFailureTypeWhileDiscardingStatementAndMessages() {
-        assertThatThrownBy(() -> jdbc.queryForObject("SELECT 'synthetic-private-value'::integer", Integer.class))
+    void failingSqlRetainsStatementExceptionMessageAndStack() {
+        assertThatThrownBy(() -> jdbc.queryForObject("SELECT 'not-an-integer'::integer", Integer.class))
                 .isInstanceOf(org.springframework.dao.DataAccessException.class);
         tracerProvider.forceFlush().join(5, java.util.concurrent.TimeUnit.SECONDS);
         assertThat(SPANS.getFinishedSpanItems()).anySatisfy(span -> {
             assertThat(span.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.ERROR);
+            assertThat(span.getAttributes().toString()).contains("SELECT 'not-an-integer'::integer");
             assertThat(span.getEvents().toString())
-                    .contains("exception.type")
-                    .doesNotContain("synthetic-private-value", "exception.message");
+                    .contains("exception.type", "exception.message", "exception.stacktrace", "not-an-integer");
+        });
+    }
+
+    @Test
+    void doesNotCaptureHttpBodiesOrBoundSqlParameters() throws Exception {
+        int port = environment.getRequiredProperty("local.server.port", Integer.class);
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/inventory"))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer synthetic-header-value")
+                .POST(HttpRequest.BodyPublishers.ofString("""
+                        {"serialNumber":"TRACE-BODY-ITEM","type":"Drill",
+                         "name":"synthetic-body-value","status":"AVAILABLE"}
+                        """))
+                .build();
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            assertThat(client.send(request, HttpResponse.BodyHandlers.ofString())
+                            .statusCode())
+                    .isEqualTo(201);
+        }
+        assertThat(jdbc.queryForObject("SELECT ?::text", String.class, "synthetic-bound-value"))
+                .isEqualTo("synthetic-bound-value");
+        tracerProvider.forceFlush().join(5, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertThat(SPANS.getFinishedSpanItems())
+                .isNotEmpty()
+                .allSatisfy(span -> assertThat(span.getAttributes().toString() + span.getEvents())
+                        .doesNotContain(
+                                "synthetic-body-value",
+                                "synthetic-bound-value",
+                                "synthetic-header-value",
+                                "jdbc.params"));
+        assertThat(SPANS.getFinishedSpanItems())
+                .anySatisfy(span -> assertThat(span.getAttributes().toString()).contains("SELECT ?::text"));
+    }
+
+    @Test
+    void retainsFrameworkEventsLinkAttributesAndErrorDescriptions() {
+        io.opentelemetry.api.trace.Tracer tracer = tracerProvider.get("inventory-diagnostics-test");
+        io.opentelemetry.api.trace.Span previous =
+                tracer.spanBuilder("previous.work").startSpan();
+        previous.end();
+        io.opentelemetry.api.trace.Span span = tracer.spanBuilder("diagnostic.work")
+                .addLink(
+                        previous.getSpanContext(),
+                        io.opentelemetry.api.common.Attributes.of(
+                                io.opentelemetry.api.common.AttributeKey.stringKey("diagnostic.cause"), "retry"))
+                .startSpan();
+        span.setAttribute("diagnostic.phase", "recovery");
+        span.addEvent("recovery.scheduled");
+        span.setStatus(io.opentelemetry.api.trace.StatusCode.ERROR, "Broker acknowledgement timed out");
+        span.end();
+        tracerProvider.forceFlush().join(5, java.util.concurrent.TimeUnit.SECONDS);
+
+        assertThat(SPANS.getFinishedSpanItems()).anySatisfy(data -> {
+            assertThat(data.getSpanId()).isEqualTo(span.getSpanContext().getSpanId());
+            assertThat(data.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("diagnostic.phase")))
+                    .isEqualTo("recovery");
+            assertThat(data.getEvents())
+                    .singleElement()
+                    .satisfies(event -> assertThat(event.getName()).isEqualTo("recovery.scheduled"));
+            assertThat(data.getLinks()).singleElement().satisfies(link -> {
+                assertThat(link.getSpanContext()).isEqualTo(previous.getSpanContext());
+                assertThat(link.getAttributes()
+                                .get(io.opentelemetry.api.common.AttributeKey.stringKey("diagnostic.cause")))
+                        .isEqualTo("retry");
+            });
+            assertThat(data.getStatus().getDescription()).isEqualTo("Broker acknowledgement timed out");
         });
     }
 
@@ -167,6 +250,9 @@ class ObservabilityIT extends PostgresIntegrationTest {
     private HttpResponse<String> get(String portProperty, String path, String parent) throws Exception {
         int port = environment.getRequiredProperty(portProperty, Integer.class);
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path));
+        request.header("Authorization", "Bearer synthetic-header-value");
+        request.header("Cookie", "session=synthetic-cookie-value");
+        request.header("baggage", "customer=synthetic-baggage-value");
         if (parent != null) {
             request.header("traceparent", parent);
         }

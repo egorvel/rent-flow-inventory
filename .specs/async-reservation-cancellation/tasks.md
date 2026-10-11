@@ -316,12 +316,14 @@ AC4.1-AC4.4, AC4.6-AC4.7; `design.md` §1.3, §2, §4.1-§4.2, §4.6,
   normalized event ID only when parseable. No exception header, message, stack trace, Java type
   header, or accumulated original source header is present, except valid W3C traceparent/tracestate as specified in ../observability/design.md §4.
 - Log capture proves successful DLT publication emits one structured error diagnostic with
-  bounded source metadata, category, and optional event ID but never the key, value, payload,
-  exception message, SQL detail, or credentials. Any separate unexpected-exception stack-trace
-  diagnostic also excludes the Kafka key and value.
+  bounded source metadata, category, and optional event ID without interpolating an undecoded key
+  or complete payload. Validated equipment serials and ordinary exception/SQL diagnostics are
+  permitted under ../observability/design.md §3; application code does not deliberately log
+  credentials or retain malformed raw input in rejection messages.
 - Actual retry, DLT-success, and DLT-failure callbacks serialize correlation and bounded fields
-  through the configured ECS encoder. DLT-failure logs retain safe cause types/frames and omit
-  exception messages and payloads; retry logs use `RETRYABLE_PROCESSING_FAILURE`.
+  through the configured ECS encoder. DLT-failure logs retain ordinary cause messages/types/frames
+  without interpolating complete payloads or undecoded keys; retry logs use
+  `RETRYABLE_PROCESSING_FAILURE`.
 - The single counter family exposes only `received`, `released`, `already_available`, `duplicate`,
   `retry`, `dead_letter`, and `dead_letter_publish_failure`; no event ID, serial, offset, exception,
   or other unbounded label is registered.

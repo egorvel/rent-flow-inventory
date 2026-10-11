@@ -48,7 +48,7 @@ spring:
 
 inventory:
   kafka:
-    cluster-id: ${INVENTORY_KAFKA_CLUSTER_ID:unknown}
+    cluster-id: ${INVENTORY_KAFKA_CLUSTER_ID:}
     reservation-cancellation:
       topic: ${INVENTORY_CANCELLATION_TOPIC:rentflow.reservation.cancelled.v1}
       dead-letter-topic: ${INVENTORY_CANCELLATION_DLT:rentflow.inventory.reservation-cancellation.dlt.v1}
@@ -86,7 +86,8 @@ management:
     baggage:
       enabled: false
     sampling:
-      probability: ${TRACING_SAMPLING_PROBABILITY:0.1}
+      # reduce it later with the growing amount of requests
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
     export:
       otlp:
         enabled: ${TRACING_EXPORT_ENABLED:false}
@@ -126,11 +127,9 @@ management:
 
 logging:
   level:
-    org.hibernate.orm.jdbc.error: "off"
-    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: "off"
-    org.apache.kafka.clients.consumer.ConsumerConfig: "off"
-    org.apache.kafka.clients.producer.ProducerConfig: "off"
-    org.apache.kafka.clients.admin.AdminClientConfig: "off"
+    org.apache.kafka.clients.consumer.ConsumerConfig: warn
+    org.apache.kafka.clients.producer.ProducerConfig: warn
+    org.apache.kafka.clients.admin.AdminClientConfig: warn
   structured:
     format:
       console: ecs
@@ -139,9 +138,9 @@ logging:
         environment: ${OBSERVABILITY_ENVIRONMENT:local}
         node-name: ${OBSERVABILITY_INSTANCE:${HOSTNAME:standalone}}
     json:
-      customizer: com.rentflow.util.SafeLogMembersCustomizer
       stacktrace:
-        printer: com.rentflow.util.SafeStackTracePrinter
+        max-length: 16384
+        max-throwable-depth: 64
 
 jdbc:
   includes: connection,query

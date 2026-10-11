@@ -137,7 +137,7 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         String serial = "KAFKA-TRACED-RETRY";
         UUID eventId = UUID.randomUUID();
         inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Kafka", InventoryStatus.RESERVED));
-        doThrow(new IllegalStateException("synthetic-private-value"))
+        doThrow(new IllegalStateException("Equipment processing failed"))
                 .doCallRealMethod()
                 .when(service)
                 .releaseAfterCancellation(argThat(event -> event.eventId().equals(eventId)));
@@ -164,8 +164,8 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         assertThat(spans.stream().filter(span -> span.getKind() == io.opentelemetry.api.trace.SpanKind.CONSUMER))
                 .hasSize(2);
         assertThat(spans)
-                .allSatisfy(span -> assertThat(span.getAttributes().toString() + span.getEvents())
-                        .doesNotContain(serial, "synthetic-private-value"));
+                .anySatisfy(span -> assertThat(span.getEvents().toString())
+                        .contains("exception.message", "Equipment processing failed"));
         assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
         assertThat(history.count()).isOne();
         assertThat(kafkaLogs(output, eventId, "retry")).singleElement().satisfies(log -> {
@@ -181,7 +181,9 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
                     .isEqualTo(sent.getRecordMetadata().partition());
             assertThat(log.path("offset").asLong())
                     .isEqualTo(sent.getRecordMetadata().offset());
-            assertThat(log.toString()).doesNotContain(serial, "synthetic-private-value");
+            assertThat(log.path("error").path("stack_trace").asText()).contains("Equipment processing failed");
+            assertThat(log.toString())
+                    .doesNotContain(new String(event(eventId, serial, "2026-09-15T15:30:00Z"), StandardCharsets.UTF_8));
         });
     }
 
@@ -192,7 +194,7 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         java.util.concurrent.atomic.AtomicBoolean failSend = new java.util.concurrent.atomic.AtomicBoolean(true);
         doAnswer(invocation -> failSend.get()
                         ? java.util.concurrent.CompletableFuture.failedFuture(
-                                new IllegalStateException("synthetic-private-value"))
+                                new IllegalStateException("Broker acknowledgement timed out"))
                         : invocation.callRealMethod())
                 .when(kafka)
                 .send(argThat((org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> record) ->
@@ -236,8 +238,11 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
                     assertThat(log.path("offset").asLong())
                             .isEqualTo(sent.getRecordMetadata().offset());
                     assertThat(log.path("error").path("stack_trace").asText())
-                            .contains("IllegalStateException", "ReservationCancellationKafkaIT");
-                    assertThat(log.toString()).doesNotContain(serial, "synthetic-private-value");
+                            .contains(
+                                    "IllegalStateException",
+                                    "ReservationCancellationKafkaIT",
+                                    "Broker acknowledgement timed out");
+                    assertThat(log.path("error").path("message").asText()).isNotBlank();
                 });
         assertThat(kafkaLogs(output, eventId, "dead_letter")).singleElement().satisfies(log -> {
             assertThat(log.path("traceId").asText()).isEqualTo(traceId);
@@ -330,7 +335,7 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
         assertThat(history.count()).isOne();
         assertThat(consumer.getAttributes().toString() + consumer.getEvents())
-                .doesNotContain(serial, "synthetic-private-value");
+                .doesNotContain("synthetic-private-value");
     }
 
     @Test
@@ -339,7 +344,7 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         String serial = "KAFKA-FATAL-PROCESSING";
         UUID eventId = UUID.randomUUID();
         inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Kafka", InventoryStatus.RESERVED));
-        doThrow(new ClassCastException("synthetic-private-value"))
+        doThrow(new ClassCastException("Unexpected equipment state"))
                 .when(service)
                 .releaseAfterCancellation(argThat(event -> event.eventId().equals(eventId)));
         double retries = counter("retry");
@@ -450,7 +455,7 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         String serial = "KAFKA-RETRIES-EXHAUSTED";
         UUID eventId = UUID.randomUUID();
         inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Kafka", InventoryStatus.RESERVED));
-        doThrow(new IllegalStateException("synthetic-private-value"))
+        doThrow(new IllegalStateException("Equipment processing failed"))
                 .when(service)
                 .releaseAfterCancellation(argThat(event -> event.eventId().equals(eventId)));
         double retriesBefore = counter("retry");
@@ -508,8 +513,7 @@ class ReservationCancellationKafkaIT extends PostgresIntegrationTest {
         assertThat(consumers).extracting(SpanData::getSpanId).contains(publication.getParentSpanId());
         assertThat(spans)
                 .allSatisfy(span -> assertThat(span.getAttributes().toString() + span.getEvents())
-                        .doesNotContain(
-                                "synthetic-private-value", new String(deadLetter.key(), StandardCharsets.UTF_8)));
+                        .doesNotContain(new String(deadLetter.value(), StandardCharsets.UTF_8)));
     }
 
     private List<JsonNode> kafkaLogs(CapturedOutput output, UUID eventId, String outcome) {

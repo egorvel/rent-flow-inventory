@@ -95,6 +95,7 @@ public class InventoryKafkaConfig {
                         .addKeyValue("offset", record.offset())
                         .addKeyValue("failureCode", failureCode.name())
                         .addKeyValue("eventId", eventId.map(UUID::toString).orElse("unavailable"))
+                        .setCause(exception)
                         .log("Reservation cancellation sent to DLT");
             }
 
@@ -163,6 +164,7 @@ public class InventoryKafkaConfig {
                                     eventId(exception, record.value(), converter)
                                             .map(UUID::toString)
                                             .orElse("unavailable"))
+                            .setCause(exception)
                             .log("Reservation cancellation retry scheduled");
                 }
                 return delay;

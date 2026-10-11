@@ -118,7 +118,7 @@ class ObservabilityExporterUnavailableIT extends PostgresIntegrationTest {
             assertThat(request(client, port, "/api/v1/inventory/" + serial).statusCode())
                     .isEqualTo(200);
             assertThat(request(client, port, "/readyz").statusCode()).isEqualTo(200);
-            assertThat(PAYLOAD.get()).doesNotContain("synthetic-private-value", "jdbc.query", "exception.message");
+            assertThat(PAYLOAD.get()).contains("service.name", "rent-flow-inventory");
             FINISH.countDown();
             COLLECTOR.stop(0);
             assertThat(request(client, port, "/api/v1/inventory/" + serial).statusCode())

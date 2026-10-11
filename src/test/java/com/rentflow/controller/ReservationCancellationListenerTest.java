@@ -80,7 +80,7 @@ class ReservationCancellationListenerTest {
                     .isEqualTo(5);
             assertThat(output.getOut().split("Reservation cancellation processed", -1))
                     .hasSize(5);
-            assertThat(output).doesNotContain("synthetic-private-value", "SERIAL", "fingerprint");
+            assertThat(output).contains("SERIAL").doesNotContain("synthetic-private-value", "fingerprint");
         } finally {
             metrics.close();
         }

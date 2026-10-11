@@ -128,16 +128,19 @@ class ApiExceptionHandlerTest {
     }
 
     @Test
-    void logsUnexpectedFailuresWithSafeStackFrames(CapturedOutput output) {
+    void retainsInternalFailureDetailsWhileKeepingPublicErrorsGeneric(CapturedOutput output) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/v1/inventory/DRILL-001");
 
-        handler.handleUnexpected(new IllegalStateException("boom"), new ServletWebRequest(request));
+        ResponseEntity<ProblemResponse> response = handler.handleUnexpected(
+                new IllegalStateException("boom", new IllegalArgumentException("invalid equipment state")),
+                new ServletWebRequest(request));
 
         assertThat(output)
                 .contains("Unexpected failure handling request")
-                .doesNotContain("DRILL-001", "boom")
+                .contains("DRILL-001", "boom", "invalid equipment state")
                 .contains("java.lang.IllegalStateException")
                 .contains(
-                        "at com.rentflow.controller.ApiExceptionHandlerTest.logsUnexpectedFailuresWithSafeStackFrames");
+                        "at com.rentflow.controller.ApiExceptionHandlerTest.retainsInternalFailureDetailsWhileKeepingPublicErrorsGeneric");
+        assertThat(response.getBody().detail()).isEqualTo("An unexpected error occurred.");
     }
 }

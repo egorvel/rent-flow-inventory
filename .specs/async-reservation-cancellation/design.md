@@ -541,10 +541,12 @@ The recoverer reads a parseable event ID from the typed rejection/retry wrapper 
 never changes the record's failure classification.
 
 The dead_letter result error log is emitted only after DLT publication succeeds. A distinct dead_letter_publish_failure diagnostic is emitted on failed publication. It contains the topic, partition,
-offset, failure code, and event ID when available, but not the key, value, or exception message.
-For an unexpected exhausted exception, a separate diagnostic may include its stack trace, but it
-must not add the Kafka key or value; the original record payload is never interpolated into either
-log.
+offset, failure code, and event ID when available. A validated equipment serial may be added when
+already available and useful; the undecoded key and complete value are not interpolated into logs.
+Unexpected processing/publication diagnostics retain ordinary exception messages, cause chains
+and stack traces under ../observability/design.md §3. SQL statements and equipment values in
+driver errors are permitted there; complete Kafka payloads and deliberately logged credentials
+remain excluded. The bounded DLT header contract above is unchanged by this internal-log policy.
 
 DLT publication is deliberately non-transactional. A crash after the broker accepts the DLT
 record but before the source offset commit can create a duplicate DLT record, but it cannot lose
@@ -689,6 +691,10 @@ future-skew, or retention-window business rule.
 The event contains an event ID, occurrence time, and equipment serial number only. It carries no
 customer, order, reservation, authentication, or payment information. Inventory does not log the
 raw key or payload and does not attach either to metric labels.
+Validated equipment serials may be used in purposeful internal logs/traces, alongside event and
+source metadata. Apply ../observability/design.md §3 to ordinary exception and database diagnostics;
+no blanket throwable-message or SQL-text redactor is required. Malformed-input rejection messages
+do not retain the raw key/value or a parsing exception that echoes those bytes.
 
 The local broker remains plaintext and host-loopback-bound as documented by `rent-flow-common`.
 Production encryption, authentication, authorization, ACLs, and secret rotation are platform
@@ -757,8 +763,10 @@ architecture, and PostgreSQL suites remain green.
 - If Inventory's Compose wiring changes in `rent-flow-common`, that repository's
   `./scripts/container-smoke-test.sh` also reports `Combined container smoke verification passed`.
 - No source or DLT topic is produced through broker auto-creation, no application object is created
-  outside its owning schema, and no production secret or credential appears in code, tests,
-  configuration, logs, or documentation.
+  outside its owning schema, and no production secret or credential is embedded in code, tests,
+  committed configuration or documentation, or added to application-defined diagnostic fields.
+  Internal exception logging follows the collection controls and limits in
+  ../observability/design.md §3 rather than a universal arbitrary-text redaction guarantee.
 
 ## 12. Acceptance-criteria traceability
 

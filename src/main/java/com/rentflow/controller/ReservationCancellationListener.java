@@ -62,6 +62,7 @@ public class ReservationCancellationListener {
                 });
         LOGGER.atInfo()
                 .addKeyValue("eventId", event.eventId().toString())
+                .addKeyValue("serialNumber", event.serialNumber())
                 .addKeyValue("outcome", outcome.name().toLowerCase(java.util.Locale.ROOT))
                 .addKeyValue("sourceTopic", record.topic())
                 .addKeyValue("partition", record.partition())
@@ -73,6 +74,7 @@ public class ReservationCancellationListener {
                 metrics.counter("inventory.reservation.cancellation.clock.skew").increment();
                 LOGGER.atWarn()
                         .addKeyValue("eventId", event.eventId().toString())
+                        .addKeyValue("serialNumber", event.serialNumber())
                         .addKeyValue("failureCode", "CLOCK_SKEW")
                         .log("Cancellation occurrence time is in the future");
             } else {

@@ -245,10 +245,9 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         LOGGER.atError()
                 .addKeyValue("method", servletRequest.getMethod())
                 .addKeyValue("route", route instanceof String pattern ? pattern : "unmatched")
+                .addKeyValue("path", servletRequest.getRequestURI())
                 .addKeyValue("exceptionType", exception.getClass().getName())
-                .addKeyValue(
-                        "error.stack_trace",
-                        new com.rentflow.util.SafeStackTracePrinter().printStackTraceToString(exception))
+                .setCause(exception)
                 .log("Unexpected failure handling request");
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)

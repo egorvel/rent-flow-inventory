@@ -283,11 +283,11 @@ belongs to Common and is not included in this repository's Compose deployment.
 | `OBSERVABILITY_INSTANCE` | `HOSTNAME`, then `standalone` | Runtime instance for logs and traces |
 | `TRACING_EXPORT_ENABLED` | `false` | Enable asynchronous OTLP trace export |
 | `TRACING_OTLP_ENDPOINT` | `http://localhost:4318/v1/traces` | Complete Alloy OTLP HTTP/protobuf endpoint |
-| `TRACING_SAMPLING_PROBABILITY` | `0.1`; `1.0` with `local` profile | Parent-based sampling probability |
-| `INVENTORY_KAFKA_CLUSTER_ID` | `unknown` | Deployment cluster ID; avoids observation-triggered broker discovery |
+| `TRACING_SAMPLING_PROBABILITY` | `1.0` | Parent-based sampling probability; reduce as traffic grows |
+| `INVENTORY_KAFKA_CLUSTER_ID` | Unset | Optional actual broker cluster ID; otherwise Spring Kafka discovers it |
 | `INVENTORY_IDEMPOTENCY_CLEANUP_BACKLOG_REFRESH_DELAY` | `60s` | Independent backlog measurement interval |
 
-For host development use `SPRING_PROFILES_ACTIVE=local` for full sampling; enable export only
+For host development use `SPRING_PROFILES_ACTIVE=local`; enable export only
 when Alloy is available. Restrict the management listener
 with private networking, firewall/ingress rules and TLS outside local development.
 
@@ -314,11 +314,21 @@ Inventory instances. Sum per-instance deletion/outcome counters when computing t
 
 Logs contain `service.name`, `service.environment`, `service.node.name`, `traceId` and `spanId`
 when an observation is active. Cancellation results produce one INFO record with `eventId`,
-`outcome`, `sourceTopic`, `partition` and `offset`; retries and recovery failures add bounded
-failure metadata. Exception types/frames remain available, but messages, raw request URLs,
-bodies, SQL text/parameters and unrestricted MDC fields are excluded. SQL error/configuration
-loggers that could print sensitive values are disabled. These logs are diagnostics, not a durable
-audit trail.
+`serialNumber`, `outcome`, `sourceTopic`, `partition` and `offset`; retries and recovery failures
+add bounded failure categories and ordinary exception diagnostics. Spring Boot's native ECS
+encoder retains exception messages, causes, suppressed exceptions and useful structured fields.
+Printed stacks are limited to 16384 characters and 64 frames per throwable. Hibernate error
+diagnostics remain enabled; Kafka consumer/producer/admin configuration loggers use WARN.
+These logs are diagnostics, not a durable audit trail.
+
+Actual request paths and equipment identifiers are permitted in internal diagnostics; metric
+labels still use route templates and never individual equipment/event IDs. Automatic HTTP body,
+header and query-string capture remains disabled, as do JDBC parameter capture and Hibernate
+bind-value TRACE logging. Application logs do not dump complete Kafka payloads or undecoded keys,
+or deliberately include credentials/tokens. Public unexpected-error responses remain generic.
+There is no blanket field allowlist or arbitrary-text redactor: SQL literals and driver/exception
+messages can contain values. Use targeted native configuration or collector controls for a
+specific sensitive field if one is identified.
 
 Tracing uses framework W3C `traceparent`/`tracestate` propagation through Spring Kafka, Micrometer
 and OpenTelemetry. Baggage propagation is disabled with `management.tracing.baggage.enabled=false`.
@@ -326,9 +336,17 @@ The tracing libraries handle incoming context; missing or unusable context does 
 cancellation. DLT records retain their exact key/value/partition and
 diagnostic headers, plus valid tracing context. Retries share the originating trace and DLT
 publication has its own producer span. Reservation must separately preserve context in its
-durable outbox for producer-restart correlation. JDBC spans retain timing and datasource identity
-without SQL text/values. Export uses a bounded 2048-span queue, 512-span batches, and two-second
+durable outbox for producer-restart correlation. JDBC spans retain timing, datasource identity
+and SQL statement text with bound-parameter capture disabled. Framework span events, links and
+error descriptions are retained. Export uses a bounded 2048-span queue, 512-span batches, and two-second
 connection/call timeouts; overload drops telemetry rather than blocking business processing.
+
+Kafka cluster identity normally comes from Spring Kafka discovery. A successful lookup is
+cached; in installed Spring Kafka 4.1.0, failed discovery may recur during observed operations
+and uses a default 30-second admin operation timeout. To bypass discovery when admin access is
+restricted or delays are observed, set `INVENTORY_KAFKA_CLUSTER_ID` on Inventory to the existing
+identity of its target broker cluster. Do not generate an application ID or use a placeholder.
+The override identifies the remote service in traces; it does not choose brokers or change groups.
 
 ## API Examples
 

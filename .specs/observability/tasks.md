@@ -2,9 +2,11 @@
 
 ## 1. Delivery rules
 
-Each task is one safe commit. T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9.
+Each task is one safe commit. T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10.
 All are required for this feature; T7–T9 cover framework propagation and the Kafka review findings
-after the baseline.
+after the baseline. T10 applies the revised diagnostic policy using native configuration.
+T3/T9 below describe the final policy rather than preserving
+the superseded blanket-sanitization requirements.
 Keep existing project layers, explicit Java types, persistence contracts and mandatory clean verify.
 The resolved decisions are recorded in requirements.md; no additional product decisions remain.
 
@@ -26,14 +28,16 @@ DoD.: Integration tests assert Prometheus only on management, probes on applicat
 health details, unchanged OpenAPI, histogram buckets, resource identity, no high-cardinality labels,
 and readiness/business responses unaffected by absent/slow collector or saturated export queue.
 
-### T3 — Sanitize diagnostics and instrument JDBC
+### T3 — Preserve useful diagnostics and instrument JDBC
 
 Refs.: AC1.4, AC2.6; design.md §3.
 
-Add ECS logging, safe throwable formatting, span export sanitization and JDBC observations.
-DoD.: Tests assert JSON stdout identity/correlation, retained exception types/frames and absent
-synthetic secrets/raw URLs/SQL/parameters/messages in serialized logs and exported spans; HTTP
-parent/request/connection/query relationships, Flyway/JPA transactions and Hikari meters pass.
+Add native ECS logging, ordinary throwable formatting and JDBC observations.
+DoD.: Tests assert JSON stdout identity/correlation and retained ordinary exception/cause messages,
+frames, SQL statement text and actual request paths in logs/spans where emitted. Body/header/query
+and bound-parameter capture stay disabled; invalid Kafka conversion does not echo raw key/payload,
+and public unexpected-error responses remain generic. HTTP parent/request/connection/query
+relationships, Flyway/JPA transactions and Hikari meters pass.
 
 ### T4 — Correlate cancellation delivery and recovery
 
@@ -51,7 +55,8 @@ Refs.: AC3.1–AC3.3; design.md §5.
 Add scheduled bounded count refresh, freshness/failure signals and cleanup observations.
 DoD.: Tests assert unknown startup backlog, successful count/time refresh, failure retention and
 recovery, no DB work on scrape, five-second query timeout, parallel scheduling capacity, safe
-cleanup error observations, timestamps and unchanged daily schedule/chunk transaction/budget.
+cleanup error observations with ordinary exception diagnostics, timestamps and unchanged daily
+schedule/chunk transaction/budget.
 
 ### T6 — Document the handoff and verify the complete service
 
@@ -85,13 +90,37 @@ scheduled counters/logs match actual backoff decisions and their failed-attempt 
 Framework-fatal and business-rejection failures produce no retry WARN or retry increment. Exception
 changes and recovery failures reset retry state as before; default delays remain 1, 2, 4, 8 seconds.
 
-### T9 — Preserve safe DLT causes and verify serialized callbacks
+### T9 — Preserve DLT causes and verify serialized callbacks
 
 Refs.: AC2.3, AC2.6, AC4.1, AC4.2; design.md §3, §4, §6.
 
-Attach publication failures to their fixed ERROR message and reuse the existing safe stack printer.
+Attach publication failures to their fixed ERROR message and use native throwable formatting.
 Reconcile affected cancellation documentation and run the complete service checks.
 DoD.: Actual callback logs serialized by the configured ECS encoder retain severity, source metadata,
-event/trace/span correlation and safe cause types/frames without synthetic private values. Failed
-publication still retains the source offset until confirmed recovery. Affected specs have dated
+event/trace/span correlation and ordinary cause messages/types/frames without deliberately
+interpolating complete Kafka payloads or undecoded keys. Failed publication still retains the
+source offset until confirmed recovery. Affected specs have dated
 evaluation reports; Maven clean verify reports BUILD SUCCESS and Inventory container smoke passes.
+
+### T10 — Replace blanket filtering with framework diagnostics
+
+Refs.: AC1.3–AC1.5, AC2.2–AC2.3, AC2.6, AC4.1–AC4.2; design.md §3–§4, §6.
+
+Remove the blanket JSON customizer, custom stack printer, span exporter wrapper and obsolete
+message-scrubbing tests. Use Spring Boot's native ECS/stack limits, restore Hibernate error
+diagnostics and set the three Kafka configuration loggers to WARN. Retain disabled body/header/
+query-string, baggage and SQL-binding capture, and existing public error contracts. Permit useful
+validated serial fields without adding recovery-time parsing. Remove the unknown cluster-ID
+fallback and apply the existing setter only to an explicitly supplied nonblank actual ID; retain
+framework discovery otherwise. Update README, the Common handoff and relevant smoke assertions
+to describe actual runtime behavior.
+
+DoD.: Serialized callback and HTTP/JDBC integration tests retain ordinary exception/cause messages,
+SQL statement text, actual paths and framework diagnostic metadata where emitted. Tests prove
+automatic sensitive-input and bound-parameter capture remain disabled, invalid conversion does
+not echo raw key/payload, public 500 responses remain generic, and metrics use route templates
+without business-ID labels. Configuration tests prove unset/blank cluster ID leaves discovery
+enabled and an actual configured ID is applied without a fabricated fallback. Kafka propagation,
+retry counts, DLT headers/bytes/offsets, transactions, Hikari meters and collector failure behavior
+remain green. Maven clean verify reports BUILD SUCCESS and Inventory container smoke passes;
+documentation matches emitted telemetry and affected specs have dated self-evaluation reports.

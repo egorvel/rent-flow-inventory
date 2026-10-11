@@ -249,6 +249,14 @@ compose stop rentflow-postgres
 wait_for_http_status 503 "${BASE_URL}/readyz" 3 40
 assert_http_status 200 "${BASE_URL}/livez"
 
+info "Checking database failure diagnostics and generic public errors"
+database_failure="$(curl --silent --show-error --max-time 40 "${BASE_URL}/api/v1/inventory/${SERIAL_NUMBER}")"
+[[ "$database_failure" == *'"status":500'* && "$database_failure" == *'"detail":"An unexpected error occurred."'* ]] || fail "Database outage must return the generic public error"
+[[ "$database_failure" != *'Hikari'* && "$database_failure" != *'stack_trace'* ]] || fail "Public error exposed internal diagnostics"
+inventory_logs="$(compose logs --no-color inventory)"
+[[ "$inventory_logs" == *'Unexpected failure handling request'* && "$inventory_logs" == *'"stack_trace":'* ]] || fail "ECS exception diagnostics missing"
+[[ "$inventory_logs" == *'Connection is not available'* ]] || fail "Database failure cause message missing"
+
 info "Restarting PostgreSQL and checking readiness recovery"
 compose start rentflow-postgres
 wait_for_service_health rentflow-postgres 60
