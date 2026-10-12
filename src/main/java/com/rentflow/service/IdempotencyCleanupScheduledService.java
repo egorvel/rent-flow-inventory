@@ -74,20 +74,23 @@ public class IdempotencyCleanupScheduledService {
         lastRun.set(clock.instant().getEpochSecond());
         Timer.Sample sample = Timer.start(metrics);
         Observation observation = Observation.start("inventory.idempotency.cleanup.run", observations);
-        try (Observation.Scope scope = observation.openScope()) {
-            int deleted;
-            do {
-                deleted = cleanup.deleteChunk();
-                metrics.counter("inventory.idempotency.cleanup.deleted").increment(deleted);
-            } while (deleted == 1000 && System.nanoTime() - started < budgetNanos);
-            lastSuccess.set(clock.instant().getEpochSecond());
-            refreshBacklog();
-        } catch (RuntimeException exception) {
-            observation.error(exception);
-            metrics.counter("inventory.idempotency.cleanup.failures").increment();
-            LOGGER.atWarn()
-                    .addKeyValue("exceptionType", exception.getClass().getName())
-                    .log("Idempotency cleanup failed; the next scheduled run will retry");
+        try (Observation.Scope _ = observation.openScope()) {
+            try {
+                int deleted;
+                do {
+                    deleted = cleanup.deleteChunk();
+                    metrics.counter("inventory.idempotency.cleanup.deleted").increment(deleted);
+                } while (deleted == 1000 && System.nanoTime() - started < budgetNanos);
+                lastSuccess.set(clock.instant().getEpochSecond());
+                refreshBacklog();
+            } catch (RuntimeException exception) {
+                observation.error(exception);
+                metrics.counter("inventory.idempotency.cleanup.failures").increment();
+                LOGGER.atWarn()
+                        .addKeyValue("exceptionType", exception.getClass().getName())
+                        .setCause(exception)
+                        .log("Idempotency cleanup failed; the next scheduled run will retry");
+            }
         } finally {
             sample.stop(metrics.timer("inventory.idempotency.cleanup.duration"));
             observation.stop();

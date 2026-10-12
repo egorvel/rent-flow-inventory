@@ -2,11 +2,20 @@ package com.rentflow.service;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationHandler;
 import io.micrometer.observation.ObservationRegistry;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -145,6 +154,63 @@ class IdempotencyCleanupScheduledServiceTest {
             verify(cleanup).countExpired();
             verifyNoMoreInteractions(cleanup);
         } finally {
+            metrics.close();
+        }
+    }
+
+    @Test
+    void failureWarningUsesCleanupObservationAndRestoresParentScope() {
+        IdempotencyCleanupService cleanup = mock(IdempotencyCleanupService.class);
+        IllegalStateException failure = new IllegalStateException("forced failure");
+        when(cleanup.deleteChunk()).thenThrow(failure);
+        ObservationRegistry observations = ObservationRegistry.create();
+        List<Observation.Context> finished = new ArrayList<>();
+        observations.observationConfig().observationHandler(new ObservationHandler<Observation.Context>() {
+            @Override
+            public boolean supportsContext(Observation.Context context) {
+                return context.getName().equals("inventory.idempotency.cleanup.run");
+            }
+
+            @Override
+            public void onStop(Observation.Context context) {
+                finished.add(context);
+            }
+        });
+        List<Observation.Context> warningContexts = new ArrayList<>();
+        AppenderBase<ILoggingEvent> appender = new AppenderBase<>() {
+            @Override
+            protected void append(ILoggingEvent event) {
+                if (event.getMessage().equals("Idempotency cleanup failed; the next scheduled run will retry")) {
+                    Observation current = observations.getCurrentObservation();
+                    warningContexts.add(current == null ? null : current.getContext());
+                }
+            }
+        };
+        Logger logger = (Logger) LoggerFactory.getLogger(IdempotencyCleanupScheduledService.class);
+        Level previousLevel = logger.getLevel();
+        appender.setContext(logger.getLoggerContext());
+        appender.start();
+        logger.setLevel(Level.WARN);
+        logger.addAppender(appender);
+        SimpleMeterRegistry metrics = new SimpleMeterRegistry();
+        try {
+            IdempotencyCleanupScheduledService service = new IdempotencyCleanupScheduledService(
+                    cleanup, metrics, Duration.ofSeconds(60), observations, Clock.systemUTC());
+            Observation parent = Observation.start("parent", observations);
+            try (Observation.Scope scope = parent.openScope()) {
+                service.cleanup();
+                assertThat(observations.getCurrentObservation()).isSameAs(parent);
+                assertThat(finished).hasSize(1);
+                assertThat(finished.getFirst().getError()).isSameAs(failure);
+                assertThat(warningContexts).containsExactly(finished.getFirst());
+            } finally {
+                parent.stop();
+            }
+            assertThat(observations.getCurrentObservation()).isNull();
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(previousLevel);
+            appender.stop();
             metrics.close();
         }
     }
