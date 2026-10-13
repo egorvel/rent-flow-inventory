@@ -17,10 +17,12 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.core.env.Environment;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import com.rentflow.model.InventoryItem;
 import com.rentflow.model.InventoryStatus;
 import com.rentflow.repository.InventoryRepository;
+import com.rentflow.support.EcsLogCapture;
 import com.rentflow.support.PostgresIntegrationTest;
 
 import io.micrometer.core.instrument.MeterRegistry;
@@ -47,7 +49,7 @@ class ObservabilityIT extends PostgresIntegrationTest {
     @Autowired
     private Environment environment;
 
-    @Autowired
+    @MockitoSpyBean
     private InventoryRepository inventory;
 
     @Autowired
@@ -145,6 +147,56 @@ class ObservabilityIT extends PostgresIntegrationTest {
                 .isFalse();
         assertThat(environment.getProperty("management.tracing.baggage.enabled", Boolean.class))
                 .isFalse();
+    }
+
+    @Test
+    void retainsFailingSqlAndCorrelatesHandledErrorsWhileKeepingPublicDetailsGeneric() throws Exception {
+        org.mockito.Mockito.doAnswer(invocation -> {
+                    jdbc.queryForObject("SELECT 'not-an-integer'::integer", Integer.class);
+                    return null;
+                })
+                .when(inventory)
+                .findById("TRACE-FAILURE");
+        try (EcsLogCapture logs = new EcsLogCapture("com.rentflow")) {
+            HttpResponse<String> response = get("local.server.port", "/api/v1/inventory/TRACE-FAILURE", null);
+            assertThat(response.statusCode()).isEqualTo(500);
+            assertThat(response.body()).doesNotContain("not-an-integer", "SELECT");
+            assertThat(tracerProvider
+                            .forceFlush()
+                            .join(5, java.util.concurrent.TimeUnit.SECONDS)
+                            .isSuccess())
+                    .isTrue();
+            assertThat(SPANS.getFinishedSpanItems()).anySatisfy(span -> {
+                assertThat(span.getName()).contains("query");
+                assertThat(span.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.ERROR);
+                assertThat(span.getAttributes().toString()).contains("SELECT 'not-an-integer'::integer");
+                assertThat(span.getEvents().toString())
+                        .contains("exception.message", "exception.stacktrace", "not-an-integer");
+            });
+            assertThat(SPANS.getFinishedSpanItems()).anySatisfy(span -> {
+                assertThat(span.getKind()).isEqualTo(io.opentelemetry.api.trace.SpanKind.SERVER);
+                assertThat(span.getStatus().getStatusCode()).isEqualTo(io.opentelemetry.api.trace.StatusCode.ERROR);
+                assertThat(span.getEvents().toString()).contains("not-an-integer");
+            });
+            assertThat(logs.events().stream()
+                            .filter(event ->
+                                    event.getLoggerName().equals("com.rentflow.controller.ApiExceptionHandler")))
+                    .singleElement()
+                    .satisfies(event -> {
+                        assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.ERROR);
+                        tools.jackson.databind.JsonNode json = EcsLogCapture.encode(event, environment);
+                        assertThat(json.path("message").asText()).isEqualTo("Unexpected failure handling request");
+                        assertThat(json.path("method").asText()).isEqualTo("GET");
+                        assertThat(json.path("route").asText()).isEqualTo("/api/v1/inventory/{serialNumber}");
+                        assertThat(json.path("path").asText()).isEqualTo("/api/v1/inventory/TRACE-FAILURE");
+                        assertThat(json.path("traceId").asText()).hasSize(32);
+                        assertThat(json.path("spanId").asText()).hasSize(16);
+                        assertThat(json.path("error").path("stack_trace").asText())
+                                .contains("not-an-integer");
+                    });
+        } finally {
+            org.mockito.Mockito.reset(inventory);
+        }
     }
 
     @Test

@@ -24,7 +24,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.filter.ServerHttpObservationFilter;
 import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
@@ -36,6 +38,8 @@ import com.rentflow.service.IdempotencyException;
 import com.rentflow.service.InventoryItemAlreadyExistsException;
 import com.rentflow.service.InventoryItemNotFoundException;
 
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import tools.jackson.databind.exc.InvalidFormatException;
 
 @RestControllerAdvice
@@ -44,6 +48,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Comparator<ViolationResponse> VIOLATION_ORDER =
             Comparator.comparing(ViolationResponse::field).thenComparing(ViolationResponse::message);
+
+    private final ObservationRegistry observationRegistry;
+
+    public ApiExceptionHandler(ObservationRegistry observationRegistry) {
+        this.observationRegistry = observationRegistry;
+    }
 
     @ExceptionHandler(InventoryItemNotFoundException.class)
     ResponseEntity<ProblemResponse> handleNotFound(InventoryItemNotFoundException exception, WebRequest request) {
@@ -234,21 +244,13 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
                     List.of());
             return objectResponse(problem, status, headers);
         }
+        recordUnexpectedFailure(exception, request);
         return objectResponse(internalError(request), HttpStatus.INTERNAL_SERVER_ERROR, headers);
     }
 
     @ExceptionHandler(Exception.class)
     ResponseEntity<ProblemResponse> handleUnexpected(Exception exception, WebRequest request) {
-        HttpServletRequest servletRequest = ((ServletWebRequest) request).getRequest();
-        Object route = servletRequest.getAttribute(
-                org.springframework.web.servlet.HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
-        LOGGER.atError()
-                .addKeyValue("method", servletRequest.getMethod())
-                .addKeyValue("route", route instanceof String pattern ? pattern : "unmatched")
-                .addKeyValue("path", servletRequest.getRequestURI())
-                .addKeyValue("exceptionType", exception.getClass().getName())
-                .setCause(exception)
-                .log("Unexpected failure handling request");
+        recordUnexpectedFailure(exception, request);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .contentType(MediaType.APPLICATION_PROBLEM_JSON)
                 .body(internalError(request));
@@ -333,6 +335,24 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
 
     private String requestPath(WebRequest request) {
         return ((ServletWebRequest) request).getRequest().getRequestURI();
+    }
+
+    private void recordUnexpectedFailure(Exception exception, WebRequest request) {
+        Observation observation = observationRegistry.getCurrentObservation();
+        if (observation != null) {
+            observation.error(exception);
+        }
+        HttpServletRequest servletRequest = ((ServletWebRequest) request).getRequest();
+        ServerHttpObservationFilter.findObservationContext(servletRequest)
+                .ifPresent(context -> context.setError(exception));
+        Object route = servletRequest.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        LOGGER.atError()
+                .addKeyValue("method", servletRequest.getMethod())
+                .addKeyValue("route", route instanceof String pattern ? pattern : "unmatched")
+                .addKeyValue("path", servletRequest.getRequestURI())
+                .addKeyValue("exceptionType", exception.getClass().getName())
+                .setCause(exception)
+                .log("Unexpected failure handling request");
     }
 
     private String parameterName(ParameterValidationResult result) {
