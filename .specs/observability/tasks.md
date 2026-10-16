@@ -2,7 +2,7 @@
 
 ## 1. Delivery rules
 
-Each task is one safe commit. T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10.
+Each task is one safe commit. T1 → T2 → T3 → T4 → T5 → T6 → T7 → T8 → T9 → T10 → T11.
 All are required for this feature; T7–T9 cover framework propagation and the Kafka review findings
 after the baseline. T10 applies the revised diagnostic policy using native configuration.
 T3/T9 below describe the final policy rather than preserving
@@ -124,3 +124,18 @@ enabled and an actual configured ID is applied without a fabricated fallback. Ka
 retry counts, DLT headers/bytes/offsets, transactions, Hikari meters and collector failure behavior
 remain green. Maven clean verify reports BUILD SUCCESS and Inventory container smoke passes;
 documentation matches emitted telemetry and affected specs have dated self-evaluation reports.
+
+### T11 — Complete status-transition observability
+
+Refs.: AC1.6–AC1.7, AC4.1–AC4.2; design.md §3.3, §6. Depends on T10.
+
+Preserve the service observation, add the batch-size summary, enable the latency histogram,
+update direct constructor calls and document method-execution semantics.
+DoD.: Unit tests use real observation/meter registries to verify accepted and rejected results,
+rethrowing RuntimeException and Error, exactly one stop/sample, final outcome/error tags,
+batch/rejected trace metadata, current repository-call scope and restored caller scope. The summary
+records one batch and its item count on accepted, rejected and failed executions. Integration tests
+assert correlated HTTP/service/database spans, actual Prometheus histogram buckets and batch
+summary count/sum, with replays excluded and equipment IDs absent from these metric labels.
+Existing business/transaction tests pass; Maven clean verify reports BUILD SUCCESS, Inventory
+container smoke passes, and the updated specs have a dated self-evaluation report.

@@ -73,6 +73,8 @@ management:
     distribution:
       percentiles-histogram:
         http.server.requests: true
+        inventory.status.transition: true
+        inventory.status.transition.batch.size: false
         inventory.reservation.cancellation.completion.delay: true
       minimum-expected-value:
         http.server.requests: 1ms

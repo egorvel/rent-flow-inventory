@@ -107,6 +107,33 @@ and stack limits are documented in
 [Spring Boot logging](https://docs.spring.io/spring-boot/reference/features/logging.html).
 The decisions in §3.1 are specific to Inventory's present data and diagnostic needs.
 
+### 3.3 Status-transition method observations
+
+AC1.6–AC1.7: retain the inventory.status.transition observation around
+InventoryService.transitionStatus. Open its scope during repository calls, signal and rethrow
+RuntimeException and Error, and stop in finally after assigning the bounded outcome tag:
+accepted, rejected or error. Business rejections are normal returns and do not signal a technical
+error. Keep batch.size and, for rejections, rejected.items as high-cardinality trace attributes;
+rejected.items counts validation failures, not all unchanged items in an atomic rejected batch.
+Closing the scope restores the caller's observation, including on exceptions.
+
+Use the observation's built-in timer count and duration; add no duplicate invocation counter.
+Enable management.metrics.distribution.percentiles-histogram.inventory.status.transition with
+Micrometer's default bucket range; no new SLO or latency threshold is selected. Inject the existing
+MeterRegistry and record inventory.status.transition.batch.size once per invocation before the
+business work. Its count is attempted batches and total amount is submitted items, including
+rejections and technical failures. Give this summary no custom labels or histogram. Equipment
+identifiers and exact item counts never become metric labels.
+
+These signals describe method execution. The surrounding IdempotentStatusTransitionService
+transaction may flush or fail after the observation stops; accepted does not mean committed.
+Requests rejected before this method and idempotency replays do not contribute. Preserve existing
+locking order, all-or-nothing validation, writes and transaction boundaries. Update direct test
+constructor calls with ObservationRegistry.NOOP and a meter registry; use real registries and
+handlers to test accepted/rejected/exception lifecycles, final metric tags, scope restoration and
+summary count/total. Integration tests verify correlated service/database spans, Prometheus
+histogram buckets and summary samples, and exclusion of replay invocations.
+
 ## 4. Cancellation processing and DLT
 
 AC2.1–AC2.5: enable listener/template observations and give the listener a stable identifier.

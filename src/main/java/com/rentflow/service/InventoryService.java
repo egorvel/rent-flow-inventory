@@ -27,20 +27,30 @@ import com.rentflow.repository.InventoryRepository;
 import com.rentflow.repository.InventoryStatusHistoryRepository;
 import com.rentflow.repository.ReservationCancellationInboxRepository;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
+
 @Service
 public class InventoryService {
 
     private final InventoryRepository repository;
     private final InventoryStatusHistoryRepository historyRepository;
     private final ReservationCancellationInboxRepository cancellationInboxRepository;
+    private final ObservationRegistry observationRegistry;
+    private final MeterRegistry metrics;
 
     public InventoryService(
             InventoryRepository repository,
             InventoryStatusHistoryRepository historyRepository,
-            ReservationCancellationInboxRepository cancellationInboxRepository) {
+            ReservationCancellationInboxRepository cancellationInboxRepository,
+            ObservationRegistry observationRegistry,
+            MeterRegistry metrics) {
         this.repository = repository;
         this.historyRepository = historyRepository;
         this.cancellationInboxRepository = cancellationInboxRepository;
+        this.observationRegistry = observationRegistry;
+        this.metrics = metrics;
     }
 
     @Transactional
@@ -79,50 +89,66 @@ public class InventoryService {
 
     @Transactional
     public InventoryStatusTransitionOutcome transitionStatus(List<InventoryStatusTransition> transitions) {
-        Map<String, InventoryItem> items = new HashMap<>();
-        List<String> serialNumbers = transitions.stream()
-                .map(InventoryStatusTransition::serialNumber)
-                .distinct()
-                .sorted()
-                .toList();
-        for (String serialNumber : serialNumbers) {
-            repository.findForUpdateBySerialNumber(serialNumber).ifPresent(item -> items.put(serialNumber, item));
-        }
-
-        List<InventoryStatusTransitionOutcome.Failure> failures = new ArrayList<>();
-        for (int index = 0; index < transitions.size(); index++) {
-            InventoryStatusTransition transition = transitions.get(index);
-            String serialNumber = transition.serialNumber();
-            InventoryItem item = items.get(serialNumber);
-            if (item == null) {
-                failures.add(new InventoryStatusTransitionOutcome.Failure(
-                        index,
-                        serialNumber,
-                        transition.status(),
-                        "INVENTORY_ITEM_NOT_FOUND",
-                        "Inventory item '" + serialNumber + "' was not found."));
-            } else if (!item.getStatus().canTransitionTo(transition.status())) {
-                failures.add(new InventoryStatusTransitionOutcome.Failure(
-                        index,
-                        serialNumber,
-                        transition.status(),
-                        "INVALID_INVENTORY_STATUS_TRANSITION",
-                        "Inventory item '" + serialNumber + "' cannot transition from " + item.getStatus() + " to "
-                                + transition.status() + "."));
+        Observation observation = Observation.createNotStarted("inventory.status.transition", observationRegistry)
+                .highCardinalityKeyValue("batch.size", Integer.toString(transitions.size()))
+                .start();
+        String outcome = "error";
+        try (Observation.Scope _ = observation.openScope()) {
+            metrics.summary("inventory.status.transition.batch.size").record(transitions.size());
+            Map<String, InventoryItem> items = new HashMap<>();
+            List<String> serialNumbers = transitions.stream()
+                    .map(InventoryStatusTransition::serialNumber)
+                    .distinct()
+                    .sorted()
+                    .toList();
+            for (String serialNumber : serialNumbers) {
+                repository.findForUpdateBySerialNumber(serialNumber).ifPresent(item -> items.put(serialNumber, item));
             }
-        }
-        if (!failures.isEmpty()) {
-            return InventoryStatusTransitionOutcome.rejected(failures);
-        }
 
-        for (InventoryStatusTransition transition : transitions) {
-            InventoryItem item = items.get(transition.serialNumber());
-            InventoryStatus statusFrom = item.getStatus();
-            item.setStatus(transition.status());
-            historyRepository.save(
-                    new InventoryStatusHistory(transition.serialNumber(), statusFrom, transition.status()));
+            List<InventoryStatusTransitionOutcome.Failure> failures = new ArrayList<>();
+            for (int index = 0; index < transitions.size(); index++) {
+                InventoryStatusTransition transition = transitions.get(index);
+                String serialNumber = transition.serialNumber();
+                InventoryItem item = items.get(serialNumber);
+                if (item == null) {
+                    failures.add(new InventoryStatusTransitionOutcome.Failure(
+                            index,
+                            serialNumber,
+                            transition.status(),
+                            "INVENTORY_ITEM_NOT_FOUND",
+                            "Inventory item '" + serialNumber + "' was not found."));
+                } else if (!item.getStatus().canTransitionTo(transition.status())) {
+                    failures.add(new InventoryStatusTransitionOutcome.Failure(
+                            index,
+                            serialNumber,
+                            transition.status(),
+                            "INVALID_INVENTORY_STATUS_TRANSITION",
+                            "Inventory item '" + serialNumber + "' cannot transition from " + item.getStatus() + " to "
+                                    + transition.status() + "."));
+                }
+            }
+            if (!failures.isEmpty()) {
+                outcome = "rejected";
+                observation.highCardinalityKeyValue("rejected.items", Integer.toString(failures.size()));
+                return InventoryStatusTransitionOutcome.rejected(failures);
+            }
+
+            for (InventoryStatusTransition transition : transitions) {
+                InventoryItem item = items.get(transition.serialNumber());
+                InventoryStatus statusFrom = item.getStatus();
+                item.setStatus(transition.status());
+                historyRepository.save(
+                        new InventoryStatusHistory(transition.serialNumber(), statusFrom, transition.status()));
+            }
+            outcome = "accepted";
+            return InventoryStatusTransitionOutcome.success();
+        } catch (RuntimeException | Error exception) {
+            observation.error(exception);
+            throw exception;
+        } finally {
+            observation.lowCardinalityKeyValue("outcome", outcome);
+            observation.stop();
         }
-        return InventoryStatusTransitionOutcome.success();
     }
 
     @Transactional

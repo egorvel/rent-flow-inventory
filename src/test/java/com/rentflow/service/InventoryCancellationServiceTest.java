@@ -24,6 +24,9 @@ import com.rentflow.repository.InventoryRepository;
 import com.rentflow.repository.InventoryStatusHistoryRepository;
 import com.rentflow.repository.ReservationCancellationInboxRepository;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.ObservationRegistry;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.inOrder;
@@ -45,6 +48,9 @@ class InventoryCancellationServiceTest {
 
     @Mock
     private ReservationCancellationInboxRepository inbox;
+
+    @Mock
+    private MeterRegistry metrics;
 
     @Test
     void releasesAReservedItemAndPersistsHistoryAndReceiptBeforeFlushing() {
@@ -150,7 +156,7 @@ class InventoryCancellationServiceTest {
     }
 
     private InventoryService service() {
-        return new InventoryService(inventory, history, inbox);
+        return new InventoryService(inventory, history, inbox, ObservationRegistry.NOOP, metrics);
     }
 
     private ReservationCancellationEvent event() {

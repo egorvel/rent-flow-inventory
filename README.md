@@ -298,6 +298,8 @@ on scrape (dots become underscores; timers use seconds and counters have `_total
 | Meter | Meaning |
 | --- | --- |
 | `inventory.idempotency.requests{outcome}` | `attempt`, `replay`, `mismatch`, `busy`; attempts include later rollbacks |
+| `inventory.status.transition{outcome,error}` | Observation timer with latency histogram and invocation count; `accepted`, `rejected`, `error` describe method execution before the surrounding transaction commits |
+| `inventory.status.transition.batch.size` | Distribution summary: one sample per service invocation, including rejected/failed executions; count is attempted batches, sum is submitted items |
 | `inventory.reservation.cancellation.records{outcome}` | Listener invocations (`received`, including retries), committed `released`/`already_available`/`duplicate`, scheduled `retry`, confirmed `dead_letter`, failed `dead_letter_publish_failure` |
 | `inventory.reservation.cancellation.completion.delay` | `occurredAt` to committed release/already-available; excludes duplicates/failures/future timestamps |
 | `inventory.reservation.cancellation.clock.skew` | Successful nonduplicate events with future `occurredAt`; processing still succeeds |
@@ -306,6 +308,15 @@ on scrape (dots become underscores; timers use seconds and counters have `_total
 | `inventory.idempotency.cleanup.backlog.last.success.timestamp` | Epoch seconds of the last successful count; zero means unknown |
 | `inventory.idempotency.cleanup.backlog.refresh.failures` | Failed measurements; prior count and timestamp remain unchanged |
 | `inventory.idempotency.cleanup.last.run.timestamp` / `.last.success.timestamp` | Epoch seconds of worker start and successful deletion completion; zero means no run/success |
+
+Status-transition traces include `batch.size` and, for business rejections, `rejected.items`
+(validation failures, not all unchanged items). Exact sizes and equipment identifiers are not
+metric labels. Idempotency replays and requests rejected before the service method do not
+contribute. In Prometheus, use `inventory_status_transition_seconds_count` for invocation rates
+by outcome and `inventory_status_transition_seconds_bucket` for latency percentiles. The batch
+summary exports `inventory_status_transition_batch_size_count` and `_sum` without histogram
+buckets; the explicit histogram override keeps the transition timer's prefix setting from
+enabling buckets for the summary too.
 
 Backlog counting has a five-second database query timeout and does not run on scrape. Daily
 deletion remains at 03:00 UTC with the existing transaction/chunk/budget rules. Measurement

@@ -5,6 +5,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.List;
+import java.util.UUID;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +26,7 @@ import com.rentflow.repository.InventoryRepository;
 import com.rentflow.support.EcsLogCapture;
 import com.rentflow.support.PostgresIntegrationTest;
 
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.opentelemetry.sdk.testing.exporter.InMemorySpanExporter;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
@@ -94,6 +96,86 @@ class ObservabilityIT extends PostgresIntegrationTest {
         get("local.server.port", "/api/v1/inventory", null);
         assertThat(get("local.management.port", "/actuator/prometheus", null).body())
                 .contains("http_server_requests_seconds_bucket");
+    }
+
+    @Test
+    void observesStatusTransitionWithHistogramAndBatchSummaryWithoutCountingReplay() throws Exception {
+        String serial = "TRACE-STATUS-TRANSITION";
+        inventory.saveAndFlush(new InventoryItem(serial, "Drill", "Transition test", InventoryStatus.AVAILABLE));
+        DistributionSummary batches = metrics.summary("inventory.status.transition.batch.size");
+        long previousBatches = batches.count();
+        double previousItems = batches.totalAmount();
+        long previousAccepted = metrics.timer("inventory.status.transition", "outcome", "accepted", "error", "none")
+                .count();
+        UUID key = UUID.randomUUID();
+        String traceId = "33333333333333333333333333333333";
+        int port = environment.getRequiredProperty("local.server.port", Integer.class);
+        HttpRequest request = HttpRequest.newBuilder(
+                        URI.create("http://127.0.0.1:" + port + "/api/v1/inventory/status"))
+                .header("Content-Type", "application/json")
+                .header("Idempotency-Key", key.toString())
+                .header("traceparent", "00-" + traceId + "-4444444444444444-01")
+                .method(
+                        "PATCH",
+                        HttpRequest.BodyPublishers.ofString(
+                                "[{\"serialNumber\":\"" + serial + "\",\"status\":\"RESERVED\"}]"))
+                .build();
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            HttpResponse<String> first = client.send(request, HttpResponse.BodyHandlers.ofString());
+            assertThat(first.statusCode()).isEqualTo(204);
+            assertThat(first.headers().firstValue("Idempotency-Replayed")).contains("false");
+            HttpResponse<String> replay = client.send(request, HttpResponse.BodyHandlers.ofString());
+            assertThat(replay.statusCode()).isEqualTo(204);
+            assertThat(replay.headers().firstValue("Idempotency-Replayed")).contains("true");
+        }
+        assertThat(tracerProvider
+                        .forceFlush()
+                        .join(5, java.util.concurrent.TimeUnit.SECONDS)
+                        .isSuccess())
+                .isTrue();
+        List<SpanData> spans = SPANS.getFinishedSpanItems().stream()
+                .filter(span -> span.getTraceId().equals(traceId))
+                .toList();
+        assertThat(spans.stream()
+                        .filter(span -> span.getName().equals("inventory.status.transition"))
+                        .toList())
+                .singleElement()
+                .satisfies(span -> {
+                    assertThat(span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("outcome")))
+                            .isEqualTo("accepted");
+                    assertThat(span.getAttributes()
+                                    .get(io.opentelemetry.api.common.AttributeKey.stringKey("batch.size")))
+                            .isEqualTo("1");
+                    assertThat(spans).anySatisfy(parent -> {
+                        assertThat(parent.getSpanId()).isEqualTo(span.getParentSpanId());
+                        assertThat(parent.getKind()).isEqualTo(io.opentelemetry.api.trace.SpanKind.SERVER);
+                    });
+                });
+        assertThat(spans).anySatisfy(span -> assertThat(span.getName()).contains("query"));
+        assertThat(metrics.get("inventory.status.transition")
+                        .tag("outcome", "accepted")
+                        .tag("error", "none")
+                        .timer()
+                        .count())
+                .isEqualTo(previousAccepted + 1);
+        assertThat(batches.count()).isEqualTo(previousBatches + 1);
+        assertThat(batches.totalAmount()).isEqualTo(previousItems + 1);
+        assertThat(batches.takeSnapshot().histogramCounts()).isEmpty();
+        assertThat(batches.getId().getTags()).isEmpty();
+        String scrape =
+                get("local.management.port", "/actuator/prometheus", null).body();
+        String transitionMetrics = String.join(
+                "\n",
+                scrape.lines()
+                        .filter(line -> line.startsWith("inventory_status_transition_"))
+                        .toList());
+        assertThat(transitionMetrics)
+                .contains(
+                        "inventory_status_transition_seconds_bucket{", "outcome=\"accepted\"",
+                        "service=\"rent-flow-inventory\"", "environment=\"local\"",
+                        "inventory_status_transition_batch_size_count{", "inventory_status_transition_batch_size_sum{")
+                .doesNotContain("inventory_status_transition_batch_size_bucket", serial, key.toString(), "batch.size=");
+        assertThat(inventory.findById(serial).orElseThrow().getStatus()).isEqualTo(InventoryStatus.RESERVED);
     }
 
     @Test

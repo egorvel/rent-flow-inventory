@@ -17,6 +17,8 @@ As an operator, I need internal metrics and correlated request/database traces.
 - **AC1.3 (Ubiquitous):** The service shall identify metrics, logs and traces by service, environment and instance without using business identifiers or raw URLs as metric labels.
 - **AC1.4 (Event-driven):** When an HTTP request executes database work, the service shall produce correlated request, connection and query spans and HTTP latency histograms while preserving pool metrics and persistence semantics.
 - **AC1.5 (Unwanted):** If a telemetry collector is absent, slow or unable to accept queued spans, then business operations and readiness shall remain independent of trace export.
+- **AC1.6 (Event-driven):** When InventoryService.transitionStatus executes, the service shall complete a scoped observation with accepted, rejected or error outcome, retain batch size and validation-failure count as trace metadata where applicable, record and rethrow technical failures, and publish invocation counts and latency histogram buckets without claiming transaction commit success.
+- **AC1.7 (Event-driven):** When InventoryService.transitionStatus executes, the service shall record its submitted item count once in a batch-size distribution summary, including rejected and failed executions, without using item counts or equipment identifiers as metric labels.
 
 ### US2 — Investigate cancellations safely
 
@@ -71,3 +73,6 @@ database migrations and business API changes.
     for Kafka configuration loggers. See design.md §3–§4 and tasks.md T10.
 11. Use normal Kafka cluster-ID discovery unless an actual ID is supplied by deployment;
     remove the literal unknown fallback. See design.md §4 and tasks.md T10.
+12. Observe status-transition method execution rather than transaction commit, enable its latency
+    histogram, and summarize attempted batch sizes; do not add duplicate invocation counters.
+    Idempotency replays bypass this method. See design.md §3.3 and tasks.md T11.
