@@ -131,6 +131,7 @@ class ObservabilityExporterUnavailableIT extends PostgresIntegrationTest {
         return client.send(
                 HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
                         .timeout(Duration.ofSeconds(3))
+                        .header("Authorization", "Bearer " + com.rentflow.support.SignedJwtFixture.SHARED.staff())
                         .GET()
                         .build(),
                 HttpResponse.BodyHandlers.ofString());

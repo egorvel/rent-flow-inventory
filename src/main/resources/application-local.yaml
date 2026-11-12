@@ -1,0 +1,15 @@
+management:
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    oauth:
+      client-id: inventory-swagger
+      use-pkce-with-authorization-code-grant: true
+      scopes: openid
+    persist-authorization: false

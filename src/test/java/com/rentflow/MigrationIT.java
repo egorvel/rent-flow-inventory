@@ -137,7 +137,7 @@ class MigrationIT extends PostgresIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
                         "SELECT indexdef FROM pg_indexes WHERE schemaname = 'inventory' AND indexname = 'idx_inventory_status_transition_requests_expiry'",
                         String.class))
-                .contains("expires_at, idempotency_key");
+                .contains("expires_at, caller_scope, idempotency_key");
         assertThat(jdbcTemplate.queryForObject(
                         "SELECT count(*) FROM information_schema.table_constraints WHERE table_schema = 'inventory' AND table_name = 'inventory_status_transition_requests' AND constraint_type = 'FOREIGN KEY'",
                         Integer.class))
@@ -147,6 +147,7 @@ class MigrationIT extends PostgresIntegrationTest {
                         String.class))
                 .containsExactlyInAnyOrder(
                         "idempotency_key:uuid",
+                        "caller_scope:character varying",
                         "fingerprint:character varying",
                         "http_status:integer",
                         "outcome:jsonb",
@@ -223,9 +224,9 @@ class MigrationIT extends PostgresIntegrationTest {
                 "repeat('a',64), 204, '{\"status\":204}'::jsonb, INTERVAL '6 days'")) {
             assertThatThrownBy(() -> jdbcTemplate.update(
                             """
-                    INSERT INTO inventory.inventory_status_transition_requests
+                    INSERT INTO inventory.inventory_status_transition_requests (idempotency_key, fingerprint, http_status, outcome, recorded_at, expires_at, caller_scope)
                     SELECT gen_random_uuid(), candidate.fingerprint, candidate.status, candidate.outcome,
-                        statement_timestamp(), statement_timestamp() + candidate.retention
+                        statement_timestamp(), statement_timestamp() + candidate.retention, 'legacy:unauthenticated'
                     FROM (VALUES (
                     """ + invalid + ")) AS candidate(fingerprint, status, outcome, retention)"))
                     .isInstanceOf(DataIntegrityViolationException.class);

@@ -20,7 +20,8 @@ final class IdempotencyFingerprint {
         return LengthPrefixedSha256.hex(values);
     }
 
-    static long lockId(UUID key) {
-        return LengthPrefixedSha256.firstLong(List.of("inventory-status-transition:key:v1", key.toString()));
+    static long lockId(String callerScope, UUID key) {
+        return LengthPrefixedSha256.firstLong(
+                List.of("inventory-status-transition:key:v2", callerScope, key.toString()));
     }
 }

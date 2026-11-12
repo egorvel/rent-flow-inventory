@@ -23,10 +23,12 @@ import tools.jackson.databind.ObjectMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(print = org.springframework.boot.webmvc.test.autoconfigure.MockMvcPrint.NONE)
+@org.springframework.test.context.ActiveProfiles({"test", "local"})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class OpenApiIT extends PostgresIntegrationTest {
 
@@ -42,6 +44,24 @@ class OpenApiIT extends PostgresIntegrationTest {
 
     private JsonNode document;
 
+    @Test
+    void exposesPkceConfigurationWithoutSecretsOrPersistentAuthorization() throws Exception {
+        mockMvc.perform(get("/v3/api-docs/swagger-config"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.persistAuthorization").value(false));
+        String initializer = mockMvc.perform(get("/swagger-ui/swagger-initializer.js"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        assertThat(initializer)
+                .contains("inventory-swagger", "usePkceWithAuthorizationCodeGrant", "openid")
+                .doesNotContain("clientSecret");
+        assertThat(document.at("/components/securitySchemes/inventoryOidc/flows/authorizationCode/authorizationUrl")
+                        .asString())
+                .isEqualTo(com.rentflow.support.SignedJwtFixture.SHARED.issuer() + "/protocol/openid-connect/auth");
+    }
+
     @BeforeEach
     void loadOpenApiDocument() throws Exception {
         MockHttpServletResponse response = mockMvc.perform(get("/v3/api-docs"))
@@ -53,7 +73,7 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     @Test
-    void exposesOnlyTheSevenUnauthenticatedInventoryOperations() {
+    void exposesOnlyTheSevenSecuredInventoryOperations() {
         assertThat(document.path("openapi").asString()).startsWith("3.");
         assertThat(document.at("/info/title").asString()).isEqualTo("RentFlow Inventory API");
         assertThat(document.at("/info/version").asString()).isEqualTo("v1");
@@ -96,12 +116,89 @@ class OpenApiIT extends PostgresIntegrationTest {
         assertThat(names(paths))
                 .noneMatch(path -> path.startsWith("/actuator") || path.equals("/livez") || path.equals("/readyz"));
 
-        assertThat(document.has("security")).isFalse();
-        assertThat(document.at("/components/securitySchemes").isMissingNode()
-                        || document.at("/components/securitySchemes").isEmpty())
-                .isTrue();
+        assertThat(names(document.at("/components/securitySchemes")))
+                .containsExactlyInAnyOrder("bearerJwt", "inventoryOidc");
         for (JsonNode operation : operations()) {
-            assertThat(operation.has("security")).isFalse();
+            assertThat(operation.path("security").size()).isEqualTo(2);
+            assertThat(operation.path("security").get(1).path("inventoryOidc").isEmpty())
+                    .isTrue();
+            assertThat(operation.path("description").asString()).contains("Required permission:");
+        }
+    }
+
+    @Test
+    void documentsEachOperationsPermissionsCallersAndReplayScope() {
+        assertThat(operation("/api/v1/inventory/{serialNumber}", "get")
+                        .path("description")
+                        .asString())
+                .contains("Required permission: inventory:read; approved human client or pricing-service.");
+        assertThat(operation("/api/v1/inventory", "get").path("description").asString())
+                .contains("Required permission: inventory:list; approved human client only.");
+        assertThat(operation("/api/v1/inventory-history", "get")
+                        .path("description")
+                        .asString())
+                .contains("Required permission: inventory:history; approved human client only.");
+        for (JsonNode operation : List.of(
+                operation("/api/v1/inventory", "post"),
+                operation("/api/v1/inventory/{serialNumber}", "put"),
+                operation("/api/v1/inventory/{serialNumber}", "delete"))) {
+            assertThat(operation.path("description").asString())
+                    .contains("Required permission: inventory:manage; approved human client only.");
+        }
+        for (JsonNode operation :
+                List.of(operation("/api/v1/inventory", "post"), operation("/api/v1/inventory/{serialNumber}", "put"))) {
+            assertThat(operation.path("description").asString())
+                    .contains("retains arbitrary defined status assignment");
+        }
+        JsonNode transition = operation("/api/v1/inventory/status", "patch");
+        assertThat(transition.path("description").asString())
+                .contains(
+                        "Required UUID v4 key.",
+                        "Completed outcomes replay for seven days without extending expiry.",
+                        "A new business attempt requires a new key.",
+                        "Required permission: inventory:manage for an approved human client,"
+                                + " or inventory:reserve for reservation-service targeting only RESERVED.",
+                        "Idempotency keys are scoped by verified (issuer, subject); authorization precedes replay.");
+        assertThat(parameter(transition, "Idempotency-Key").path("description").asString())
+                .contains("Exactly one canonical UUID v4; case insensitive.", "Scoped by verified (issuer, subject).")
+                .doesNotContain("Global scope");
+        for (JsonNode operation : operations()) {
+            assertThat(operation.path("description").asString())
+                    .contains("Permissions are API roles, not OAuth scopes.");
+        }
+    }
+
+    @Test
+    void documentsSharedAuthenticationAlternativesAndSecurityResponses() {
+        JsonNode bearer = document.at("/components/securitySchemes/bearerJwt");
+        assertThat(bearer.path("type").asString()).isEqualTo("http");
+        assertThat(bearer.path("scheme").asString()).isEqualTo("bearer");
+        assertThat(bearer.path("bearerFormat").asString()).isEqualTo("JWT");
+        JsonNode oidc = document.at("/components/securitySchemes/inventoryOidc");
+        assertThat(oidc.path("type").asString()).isEqualTo("oauth2");
+        assertThat(names(oidc.path("flows"))).containsExactly("authorizationCode");
+        assertThat(oidc.at("/flows/authorizationCode/tokenUrl").asString())
+                .isEqualTo(com.rentflow.support.SignedJwtFixture.SHARED.issuer() + "/protocol/openid-connect/token");
+        assertThat(names(oidc.at("/flows/authorizationCode/scopes"))).containsExactly("openid");
+        for (JsonNode operation : operations()) {
+            JsonNode security = operation.path("security");
+            assertThat(security.size()).isEqualTo(2);
+            assertThat(names(security.get(0))).containsExactly("bearerJwt");
+            assertThat(names(security.get(1))).containsExactly("inventoryOidc");
+            assertThat(security.get(0).path("bearerJwt").isArray()).isTrue();
+            assertThat(security.get(0).path("bearerJwt").isEmpty()).isTrue();
+            assertThat(security.get(1).path("inventoryOidc").isArray()).isTrue();
+            assertThat(security.get(1).path("inventoryOidc").isEmpty()).isTrue();
+            assertThat(operation.at("/responses/401/description").asString())
+                    .isEqualTo("Valid bearer authentication required.");
+            assertThat(operation.at("/responses/403/description").asString()).isEqualTo("Operation not permitted.");
+            for (String code : List.of("401", "403")) {
+                JsonNode response = operation.path("responses").path(code);
+                assertThat(names(response.path("content"))).containsExactly(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
+                assertThat(response.at("/headers/WWW-Authenticate/schema/type").asString())
+                        .isEqualTo("string");
+                assertResponseSchema(operation, code, MediaType.APPLICATION_PROBLEM_JSON_VALUE, "ProblemResponse");
+            }
         }
     }
 
@@ -427,7 +524,10 @@ class OpenApiIT extends PostgresIntegrationTest {
     }
 
     private void assertResponseCodes(JsonNode operation, String... responseCodes) {
-        assertThat(names(operation.path("responses"))).containsExactlyInAnyOrder(responseCodes);
+        assertThat(names(operation.path("responses")))
+                .containsExactlyInAnyOrderElementsOf(java.util.stream.Stream.concat(
+                                java.util.Arrays.stream(responseCodes), java.util.stream.Stream.of("401", "403"))
+                        .toList());
     }
 
     private void assertResponseSchema(JsonNode operation, String status, String mediaType, String schemaName) {

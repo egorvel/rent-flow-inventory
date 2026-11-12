@@ -78,7 +78,12 @@ public class InventoryController {
         this.converter = converter;
     }
 
-    @Operation(operationId = "createInventoryItem", summary = "Create an inventory item")
+    @Operation(
+            operationId = "createInventoryItem",
+            summary = "Create an inventory item",
+            description = "Required permission: inventory:manage; approved human client only."
+                    + " Staff create/replace retains arbitrary defined status assignment."
+                    + " Permissions are API roles, not OAuth scopes.")
     @ApiResponses({
         @ApiResponse(
                 responseCode = "201",
@@ -140,7 +145,11 @@ public class InventoryController {
         return ResponseEntity.created(location).body(converter.toResponse(item));
     }
 
-    @Operation(operationId = "getInventoryItem", summary = "Retrieve an inventory item")
+    @Operation(
+            operationId = "getInventoryItem",
+            summary = "Retrieve an inventory item",
+            description = "Required permission: inventory:read; approved human client or pricing-service."
+                    + " Permissions are API roles, not OAuth scopes.")
     @ApiResponses({
         @ApiResponse(
                 responseCode = "200",
@@ -193,7 +202,12 @@ public class InventoryController {
         return converter.toResponse(service.get(serialNumber));
     }
 
-    @Operation(operationId = "replaceInventoryItem", summary = "Fully replace an inventory item")
+    @Operation(
+            operationId = "replaceInventoryItem",
+            summary = "Fully replace an inventory item",
+            description = "Required permission: inventory:manage; approved human client only."
+                    + " Staff create/replace retains arbitrary defined status assignment."
+                    + " Permissions are API roles, not OAuth scopes.")
     @ApiResponses({
         @ApiResponse(
                 responseCode = "200",
@@ -266,14 +280,18 @@ public class InventoryController {
             operationId = "transitionInventoryStatus",
             summary = "Transition inventory statuses atomically",
             description =
-                    "Required UUID v4 key. Completed outcomes replay for seven days without extending expiry. A new business attempt requires a new key.",
+                    "Required UUID v4 key. Completed outcomes replay for seven days without extending expiry. A new business attempt requires a new key."
+                            + "\n\nRequired permission: inventory:manage for an approved human client,"
+                            + " or inventory:reserve for reservation-service targeting only RESERVED."
+                            + " Idempotency keys are scoped by verified (issuer, subject); authorization precedes replay."
+                            + " Permissions are API roles, not OAuth scopes.",
             parameters =
                     @Parameter(
                             name = "Idempotency-Key",
                             in = ParameterIn.HEADER,
                             required = true,
                             description =
-                                    "Exactly one canonical UUID v4; case insensitive. Global scope for this endpoint.",
+                                    "Exactly one canonical UUID v4; case insensitive. Scoped by verified (issuer, subject).",
                             schema =
                                     @Schema(
                                             type = "string",
@@ -432,7 +450,11 @@ public class InventoryController {
         return response.contentType(MediaType.APPLICATION_PROBLEM_JSON).body(converter.toResponse(result.outcome()));
     }
 
-    @Operation(operationId = "deleteInventoryItem", summary = "Permanently delete an inventory item")
+    @Operation(
+            operationId = "deleteInventoryItem",
+            summary = "Permanently delete an inventory item",
+            description = "Required permission: inventory:manage; approved human client only."
+                    + " Permissions are API roles, not OAuth scopes.")
     @ApiResponses({
         @ApiResponse(responseCode = "204", description = "Inventory item permanently deleted."),
         @ApiResponse(
@@ -473,7 +495,11 @@ public class InventoryController {
         return ResponseEntity.noContent().build();
     }
 
-    @Operation(operationId = "listInventoryItems", summary = "List, filter, and sort inventory items")
+    @Operation(
+            operationId = "listInventoryItems",
+            summary = "List, filter, and sort inventory items",
+            description = "Required permission: inventory:list; approved human client only."
+                    + " Permissions are API roles, not OAuth scopes.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Bounded inventory page returned."),
         @ApiResponse(

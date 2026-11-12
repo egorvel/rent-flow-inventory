@@ -78,7 +78,7 @@ class ObservabilityIT extends PostgresIntegrationTest {
     @Test
     void isolatesManagementAndKeepsApplicationProbesAndHttpHistograms() throws Exception {
         assertThat(get("local.server.port", "/actuator/prometheus", null).statusCode())
-                .isEqualTo(404);
+                .isEqualTo(403);
         HttpResponse<String> scrape = get("local.management.port", "/actuator/prometheus", null);
         assertThat(scrape.statusCode()).isEqualTo(200);
         assertThat(scrape.body())
@@ -88,7 +88,7 @@ class ObservabilityIT extends PostgresIntegrationTest {
                         "service=\"rent-flow-inventory\"",
                         "environment=\"local\"");
         assertThat(get("local.management.port", "/actuator/env", null).statusCode())
-                .isEqualTo(404);
+                .isEqualTo(403);
         assertThat(get("local.server.port", "/livez", null).statusCode()).isEqualTo(200);
         HttpResponse<String> readiness = get("local.server.port", "/readyz", null);
         assertThat(readiness.statusCode()).isEqualTo(200);
@@ -114,6 +114,7 @@ class ObservabilityIT extends PostgresIntegrationTest {
                         URI.create("http://127.0.0.1:" + port + "/api/v1/inventory/status"))
                 .header("Content-Type", "application/json")
                 .header("Idempotency-Key", key.toString())
+                .header("Authorization", "Bearer " + com.rentflow.support.SignedJwtFixture.SHARED.staff())
                 .header("traceparent", "00-" + traceId + "-4444444444444444-01")
                 .method(
                         "PATCH",
@@ -299,7 +300,7 @@ class ObservabilityIT extends PostgresIntegrationTest {
         int port = environment.getRequiredProperty("local.server.port", Integer.class);
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/inventory"))
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer synthetic-header-value")
+                .header("Authorization", "Bearer " + com.rentflow.support.SignedJwtFixture.SHARED.staff())
                 .POST(HttpRequest.BodyPublishers.ofString("""
                         {"serialNumber":"TRACE-BODY-ITEM","type":"Drill",
                          "name":"synthetic-body-value","status":"AVAILABLE"}
@@ -384,7 +385,7 @@ class ObservabilityIT extends PostgresIntegrationTest {
     private HttpResponse<String> get(String portProperty, String path, String parent) throws Exception {
         int port = environment.getRequiredProperty(portProperty, Integer.class);
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path));
-        request.header("Authorization", "Bearer synthetic-header-value");
+        request.header("Authorization", "Bearer " + com.rentflow.support.SignedJwtFixture.SHARED.staff());
         request.header("Cookie", "session=synthetic-cookie-value");
         request.header("baggage", "customer=synthetic-baggage-value");
         if (parent != null) {
@@ -393,6 +394,35 @@ class ObservabilityIT extends PostgresIntegrationTest {
         try (HttpClient client = HttpClient.newHttpClient()) {
             return client.send(request.GET().build(), HttpResponse.BodyHandlers.ofString());
         }
+    }
+
+    @Test
+    void securityDenialTracesExcludeCredentialsBodiesAndAuthorizationDetails() throws Exception {
+        int port = environment.getRequiredProperty("local.server.port", Integer.class);
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/api/v1/inventory"))
+                .header("Authorization", "Bearer synthetic-denial-credential")
+                .POST(HttpRequest.BodyPublishers.ofString("synthetic-denial-body"))
+                .build();
+        try (HttpClient client = HttpClient.newHttpClient()) {
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            assertThat(response.statusCode()).isEqualTo(401);
+            assertThat(response.body()).doesNotContain("synthetic-denial");
+        }
+        assertThat(tracerProvider
+                        .forceFlush()
+                        .join(5, java.util.concurrent.TimeUnit.SECONDS)
+                        .isSuccess())
+                .isTrue();
+        assertThat(SPANS.getFinishedSpanItems())
+                .isNotEmpty()
+                .allSatisfy(span -> assertThat(span.getAttributes().toString() + span.getEvents())
+                        .doesNotContain(
+                                "synthetic-denial", "authentication.authorities", "authorization.decision.details"));
+        assertThat(SPANS.getFinishedSpanItems()).anySatisfy(span -> {
+            assertThat(span.getKind()).isEqualTo(io.opentelemetry.api.trace.SpanKind.SERVER);
+            assertThat(span.getAttributes().get(io.opentelemetry.api.common.AttributeKey.stringKey("status")))
+                    .isEqualTo("401");
+        });
     }
 
     @TestConfiguration(proxyBeanMethods = false)

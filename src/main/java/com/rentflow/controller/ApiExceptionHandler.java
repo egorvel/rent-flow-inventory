@@ -15,6 +15,7 @@ import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.validation.method.ParameterValidationResult;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
@@ -246,6 +247,12 @@ public class ApiExceptionHandler extends ResponseEntityExceptionHandler {
         }
         recordUnexpectedFailure(exception, request);
         return objectResponse(internalError(request), HttpStatus.INTERNAL_SERVER_ERROR, headers);
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    void handleAccessDenied(AccessDeniedException exception) {
+        // Let the security filter translate method denials using the same safe handler as HTTP denials.
+        throw exception;
     }
 
     @ExceptionHandler(Exception.class)

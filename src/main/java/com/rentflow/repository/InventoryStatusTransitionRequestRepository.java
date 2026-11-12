@@ -2,7 +2,6 @@ package com.rentflow.repository;
 
 import java.time.Instant;
 import java.util.Optional;
-import java.util.UUID;
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 
@@ -13,14 +12,15 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 
 import com.rentflow.model.InventoryStatusTransitionRequest;
+import com.rentflow.model.InventoryStatusTransitionRequestId;
 
 public interface InventoryStatusTransitionRequestRepository
-        extends JpaRepository<InventoryStatusTransitionRequest, UUID> {
+        extends JpaRepository<InventoryStatusTransitionRequest, InventoryStatusTransitionRequestId> {
     @Query(value = "SELECT pg_try_advisory_xact_lock(:lockId)", nativeQuery = true)
     boolean tryExecutionLock(long lockId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    Optional<InventoryStatusTransitionRequest> findForUpdateByKey(UUID key);
+    Optional<InventoryStatusTransitionRequest> findForUpdateById(InventoryStatusTransitionRequestId id);
 
     @Query(value = "SELECT clock_timestamp()", nativeQuery = true)
     Instant databaseTime();
@@ -28,13 +28,13 @@ public interface InventoryStatusTransitionRequestRepository
     @Modifying
     @Query(value = """
             WITH expired AS (
-                SELECT idempotency_key FROM inventory.inventory_status_transition_requests
+                SELECT caller_scope, idempotency_key FROM inventory.inventory_status_transition_requests
                 WHERE expires_at <= statement_timestamp()
-                ORDER BY expires_at, idempotency_key
+                ORDER BY expires_at, caller_scope, idempotency_key
                 LIMIT 1000 FOR UPDATE SKIP LOCKED
             )
             DELETE FROM inventory.inventory_status_transition_requests r
-            USING expired e WHERE r.idempotency_key = e.idempotency_key
+            USING expired e WHERE r.caller_scope = e.caller_scope AND r.idempotency_key = e.idempotency_key
             """, nativeQuery = true)
     int deleteExpiredChunk();
 

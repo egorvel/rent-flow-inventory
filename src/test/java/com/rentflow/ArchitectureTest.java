@@ -180,8 +180,10 @@ class ArchitectureTest {
     }
 
     @Test
-    void applicationCodeDoesNotDependOnSpringSecurity() {
+    void persistenceAndDomainCodeDoNotDependOnSpringSecurity() {
         noClasses()
+                .that()
+                .resideInAnyPackage("..model..", "..repository..", "..dto..", "..util..")
                 .should()
                 .dependOnClassesThat()
                 .resideInAPackage("org.springframework.security..")

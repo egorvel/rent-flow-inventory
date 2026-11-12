@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 set -Eeuo pipefail
+set +x
+umask 077
 
 readonly PROJECT_NAME="rentflow-inventory-smoke"
 readonly BASE_URL="http://localhost:8080"
@@ -12,13 +14,15 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 cd "$PROJECT_ROOT"
+SECURITY_TMP="$(mktemp -d)"
 
 compose() {
-    docker compose --project-name "$PROJECT_NAME" "$@"
+    docker compose --project-name "$PROJECT_NAME" --file compose.yaml --file docker/security-smoke/compose.yaml "$@"
 }
 
 cleanup() {
     compose down --volumes --remove-orphans >/dev/null 2>&1 || true
+    rm -f "$SECURITY_TMP/staff.conf"
 }
 
 fail() {
@@ -168,10 +172,15 @@ assert_runtime_image() {
     ' || fail "Inventory runtime image contains build tooling or runs with the wrong identity"
 }
 
+authenticated_curl() {
+    compose exec --no-TTY security-fixture python /fixture/fixture.py header staff > "$SECURITY_TMP/staff.conf"
+    curl --config "$SECURITY_TMP/staff.conf" "$@"
+}
+
 create_item() {
     local response
 
-    response="$(curl \
+    response="$(authenticated_curl \
         --fail \
         --silent \
         --show-error \
@@ -186,7 +195,7 @@ create_item() {
 assert_item_readable() {
     local response
 
-    response="$(curl \
+    response="$(authenticated_curl \
         --fail \
         --silent \
         --show-error \
@@ -195,7 +204,11 @@ assert_item_readable() {
     [[ "$response" == "$EXPECTED_ITEM" ]] || fail "Persisted inventory item could not be retrieved"
 }
 
-trap cleanup EXIT
+final_cleanup() {
+    cleanup
+    rmdir "$SECURITY_TMP"
+}
+trap final_cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -209,20 +222,22 @@ info "Validating Compose configuration"
 compose config --quiet
 
 info "Building the Inventory runtime image"
-compose build inventory
+compose build inventory security-fixture
 
 info "Starting PostgreSQL and validating first-run bootstrap ownership"
 compose up --detach rentflow-postgres
 wait_for_service_health rentflow-postgres 60
 assert_bootstrap_state
 
-info "Starting Inventory"
+info "Starting the isolated signing fixture and Inventory"
+compose up --detach security-fixture
+wait_for_service_health security-fixture 30
 compose up --detach inventory
 wait_for_service_health inventory 120
 assert_runtime_image
 
 info "Checking private management, Prometheus metrics and JSON logs"
-assert_http_status 404 "${BASE_URL}/actuator/prometheus"
+assert_http_status 401 "${BASE_URL}/actuator/prometheus"
 management_metrics="$(compose exec --no-TTY inventory curl --fail --silent --show-error --max-time 5 http://localhost:8085/actuator/prometheus)"
 [[ "$management_metrics" == *"jvm_memory_used_bytes"* ]] || fail "Prometheus JVM metrics missing"
 [[ "$management_metrics" == *"hikaricp_connections"* ]] || fail "Prometheus connection pool metrics missing"
@@ -235,6 +250,12 @@ inventory_logs="$(compose logs --no-color inventory)"
 info "Creating and retrieving an inventory item"
 create_item
 assert_item_readable
+
+info "Verifying signed-token permissions and replay isolation"
+compose exec --no-TTY security-fixture python /fixture/fixture.py verify
+if [[ "${INVENTORY_SMOKE_FAIL_AFTER_SETUP:-0}" == "1" ]]; then
+    fail "Intentional cleanup verification failure"
+fi
 
 info "Restarting Inventory and checking database-backed persistence"
 compose restart inventory
@@ -250,7 +271,7 @@ wait_for_http_status 503 "${BASE_URL}/readyz" 3 40
 assert_http_status 200 "${BASE_URL}/livez"
 
 info "Checking database failure diagnostics and generic public errors"
-database_failure="$(curl --silent --show-error --max-time 40 "${BASE_URL}/api/v1/inventory/${SERIAL_NUMBER}")"
+database_failure="$(authenticated_curl --silent --show-error --max-time 40 "${BASE_URL}/api/v1/inventory/${SERIAL_NUMBER}")"
 [[ "$database_failure" == *'"status":500'* && "$database_failure" == *'"detail":"An unexpected error occurred."'* ]] || fail "Database outage must return the generic public error"
 [[ "$database_failure" != *'Hikari'* && "$database_failure" != *'stack_trace'* ]] || fail "Public error exposed internal diagnostics"
 inventory_logs="$(compose logs --no-color inventory)"

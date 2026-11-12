@@ -49,7 +49,11 @@ public class InventoryHistoryController {
         this.converter = converter;
     }
 
-    @Operation(operationId = "listInventoryStatusHistory", summary = "List inventory status history")
+    @Operation(
+            operationId = "listInventoryStatusHistory",
+            summary = "List inventory status history",
+            description = "Required permission: inventory:history; approved human client only."
+                    + " Permissions are API roles, not OAuth scopes.")
     @ApiResponses({
         @ApiResponse(responseCode = "200", description = "Bounded inventory status history page returned."),
         @ApiResponse(

@@ -48,9 +48,14 @@ docker compose up --detach --wait rentflow-postgres
 docker compose ps rentflow-postgres
 ```
 
-Then provide the Inventory role credentials and run the application on the host:
+Start Common's Keycloak foundation separately (see its SECURITY_WALKTHROUGH.md), then provide
+the Inventory role credentials, exact issuer and matching JWKS URL. Run on the host with the
+local profile to enable Swagger:
 
 ```bash
+export SPRING_PROFILES_ACTIVE='local'
+export SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI='http://auth.rentflow.test:8180/realms/rentflow-local'
+export SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI='http://auth.rentflow.test:8180/realms/rentflow-local/protocol/openid-connect/certs'
 export SPRING_DATASOURCE_URL='jdbc:postgresql://localhost:5432/rentflow'
 export SPRING_DATASOURCE_USERNAME='inventory'
 export SPRING_DATASOURCE_PASSWORD='inventory-local'
@@ -68,7 +73,14 @@ docker compose down
 
 ## Run With Docker Compose
 
-Build and start the complete stack:
+Set `INVENTORY_JWT_ISSUER` and `INVENTORY_JWT_JWKS` to your exact trusted issuer and its
+`/protocol/openid-connect/certs` endpoint before starting Inventory. The provider URL must be
+reachable from the container; Common's application network supplies the canonical Keycloak alias
+when running the combined stack. This standalone Compose file does not start Keycloak or attach
+to Common's network. Supply an appropriate local network override if you use the standalone
+container with Common's provider. There is no authentication-disabled fallback.
+
+Build and start the Inventory/database stack:
 
 ```bash
 docker compose up --build --detach --wait
@@ -96,6 +108,122 @@ docker compose down --volumes
 
 The volume reset is destructive. It is also required before changing first-run bootstrap
 credentials for an existing local volume.
+
+## HTTP security and local API exploration
+
+Inventory validates signed RS256 **access tokens** for the exact configured issuer and the
+`inventory-api` audience. It requires the Common token shape (`typ=JWT` in the header, compared case-insensitively,
+`typ=Bearer` in the payload, nonblank `sub`/`azp`, valid `iat`/`exp` and optional `nbf`) with
+30 seconds of clock skew. Header bearer authentication is stateless: there is no login API,
+Basic authentication, session authentication, user-token forwarding or query/form token support.
+Issuer/JWKS configuration is mandatory; deployed issuers use HTTPS. Local JWT validation does
+not require Keycloak at startup or on every request. Cached keys continue working during a
+provider outage while cached; an unavailable unknown key fails closed. Keycloak is not a health
+probe dependency. Local HTTP is permitted with the `local` profile; deployed profiles require TLS.
+
+Inventory publishes public RFC 9728 discovery through Spring's metadata filter at
+`GET /.well-known/oauth-protected-resource`, including native path-suffixed discovery (for example,
+`/.well-known/oauth-protected-resource/api`). Spring derives the `resource` URL from the effective
+request scheme, host and port, preserving path suffixes and encoding and removing query parameters.
+No separate public-origin setting is required. Behind a reverse proxy, configure standard Spring
+Boot forwarding support and trusted ingress handling so the application sees the public HTTPS URL;
+the ingress must sanitize client-supplied forwarding headers. This change does not enable global
+forwarded-header processing or alter listener security selection.
+
+The metadata contains only the request-derived resource URL, the exact trusted issuer,
+`bearer_methods_supported=["header"]`, and
+`tls_client_certificate_bound_access_tokens=false`. Root discovery identifies the effective
+request origin; path-suffixed discovery identifies that origin plus the resource path. It does not
+change the `inventory-api` token audience or advertise Inventory permissions as OAuth scopes. Discovery is independent of Swagger
+and provider availability. Spring serves metadata GETs before bearer authentication, so supplied
+credentials (including malformed/duplicate headers) are ignored for those GETs. Other methods
+and unrelated well-known paths retain normal authentication and denial rules. The private
+management listener denies metadata discovery. Existing WWW-Authenticate headers are unchanged.
+
+| Caller | Allowed Inventory operations |
+| --- | --- |
+| CUSTOMER through an approved human client | Single GET (`inventory:read`), list (`inventory:list`) |
+| STAFF through an approved human client | Read/list plus CRUD and lifecycle PATCH (`inventory:manage`), history (`inventory:history`) |
+| pricing-service | Single-item GET only, with `inventory:read` |
+| reservation-service | Existing batch PATCH only, with `inventory:reserve`, all targets RESERVED |
+
+Approved human clients are `inventory-swagger` and `rentflow-pkce-check`. Only approved
+`resource_access["inventory-api"].roles` become `PERM_...` authorities; realm business roles and
+OAuth scopes do not authorize operations directly. A machine's `azp` also restricts its operations,
+even if extra roles are accidentally granted. Staff create/replace retains arbitrary defined
+status assignment without lifecycle history. Reservation's fresh claims still require AVAILABLE;
+other source states conflict atomically. A batch containing a forbidden defined target is 403
+before any replay access. No ownership/customer-ID mapping is introduced in Inventory.
+
+Swagger UI and OpenAPI are anonymous **only in the explicitly enabled local profile**; both are
+disabled by default. Open `http://localhost:8080/swagger-ui.html` and use Authorize. The public
+`inventory-swagger` registration uses Code + S256 PKCE, `openid`, no client secret, and the exact
+callback `http://localhost:8080/swagger-ui/oauth2-redirect.html`. Authorization persistence is
+false; closing/reloading the UI clears its authorization state. Port/origin changes require an
+explicit Common registration update. API calls remain protected when documentation is public.
+No Inventory CORS allowance is needed for same-origin Swagger. Additional API tools must use an
+approved client registration; ID and refresh tokens are not API credentials.
+
+**Common handoff remains pending:** its current foundation starts human composites empty. The
+Common owner must provision CUSTOMER read/list, STAFF read/list/manage/history, and matching
+interactive scope mappings using its existing policy plan/apply workflow. Until then, human
+login can succeed while Inventory correctly returns 403. Existing machine grants remain narrow.
+The Common real-provider Phase 2 gate is separate from Inventory's signed-fixture acceptance.
+
+For the shell examples below, set `INVENTORY_CURL_CONFIG` to a private mode-0600 file prepared
+by your API tool or editor, containing a curl `header = "Authorization: Bearer <access-token>"`
+line. Keep the usable token out of command arguments, shell history, checked-in files and logs;
+remove the file after use. Obtain it through PKCE for human access or the appropriate machine's
+Client Credentials flow. Use a staff token for write/history examples. Do not enable password
+grant or paste tokens into diagnostics. The examples read the header from that file.
+
+Application denials are sanitized `application/problem+json`: 401 `AUTHENTICATION_REQUIRED`
+with a Bearer challenge for missing/invalid credentials; 403 `ACCESS_DENIED` with
+`error="insufficient_scope"` for a valid but unauthorized caller or target. Permission names are
+API roles, not OAuth scopes. Unmapped routes and methods (including HEAD/OPTIONS) fail closed;
+an authorized request still receives existing business/input errors. No security denial creates
+a saved replay result. Logout/account disabling/role changes do not revoke issued JWTs immediately:
+Common's 300-second token lifetime plus up to 30 seconds skew is the remaining exposure window.
+
+`GET /livez` and `/readyz` remain anonymous and minimal. Only GET health, health/liveness,
+health/readiness and Prometheus are anonymous on the separate loopback/private management
+listener. Other management paths are generic 403 without a Bearer challenge; that listener does
+not process bearer credentials. Management content on the application listener is denied with
+401/403. Forwarded host/port headers cannot select a different listener policy. A supplied invalid
+bearer token on an application probe/docs request is rejected even though credentials are optional.
+
+Security denials increment `inventory.security.denials{reason,surface}` with bounded values
+(authentication/authorization and application/management), alongside existing service/environment
+common tags. Safe structured diagnostics contain only those categories and status. Framework
+security detail observations are disabled; the existing HTTP/business/SQL traces and error
+reporting remain enabled. Tokens, claim dumps and identity/key labels are excluded from security
+telemetry. These diagnostics are not a durable audit log.
+
+### Security cutover and rollback
+
+1. Back up the Inventory database state and retain the migration-compatible artifact. Stop old
+   Inventory instances and drain in-flight writes; do not mix old/new binaries against V5.
+2. Deploy this version with exact issuer/JWKS settings. Flyway V5 runs as `inventory`, backfills
+   ownerless outcomes into `legacy:unauthenticated`, replaces the PK with
+   `(caller_scope, idempotency_key)`, and updates the expiry index. No business/history rows are
+   deleted, and no shipped migration is edited.
+3. Callers use fresh keys after cutover and reconcile uncertain pre-cutover operations. Old
+   results cannot be attributed safely and are unavailable for authenticated replay; reusing an
+   old UUID is a new execution. Legacy rows retain their expiry and normal cleanup removes them.
+4. Validate Inventory's Maven and container suites, then perform Common's separately scoped
+   human-policy and real-provider checks. Until Pricing and Reservation add outbound Client
+   Credentials in Phases 3/4, their Inventory workflows are explicitly pending. Keep Inventory
+   enforcement intact; do not forward human tokens or claim full combined acceptance.
+5. Rollback requires coordinated schema/data restoration and a compatible application artifact,
+   with post-backup writes reconciled. Do not run an old UUID-only binary against the migrated
+   ledger. Common's final combined smoke, Phase 5 operational checks and Phase 7 production
+   hardening remain separate gates; this local setup is not a production deployment profile.
+
+The isolated Inventory smoke uses a test-only Python signing fixture with pinned dependencies,
+no host crypto installation, fresh in-memory RSA keys and private temporary curl configuration.
+It never reads the developer's realm, publishes no signer port and cleans only its own project.
+`INVENTORY_SMOKE_FAIL_AFTER_SETUP=1 ./scripts/container-smoke-test.sh` exercises failed-run cleanup.
+See `.specs/security/implementation-acceptance.md` for the implementation/evidence map.
 
 ## Database Ownership
 
@@ -364,7 +492,7 @@ The override identifies the remote service in traces; it does not choose brokers
 Create an available inventory item:
 
 ```bash
-curl --fail-with-body --include \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body --include \
   --request POST 'http://localhost:8080/api/v1/inventory' \
   --header 'Content-Type: application/json' \
   --data '{
@@ -378,14 +506,14 @@ curl --fail-with-body --include \
 Retrieve it by its case-sensitive serial number:
 
 ```bash
-curl --fail-with-body \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body \
   'http://localhost:8080/api/v1/inventory/DRILL-001'
 ```
 
 List available industrial drills, sorted by name:
 
 ```bash
-curl --fail-with-body \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body \
   'http://localhost:8080/api/v1/inventory?page=0&size=20&status=AVAILABLE&type=Industrial%20drill&sort=name&direction=asc'
 ```
 
@@ -399,7 +527,7 @@ This one-item batch transitions the item created above from `AVAILABLE` to `RESE
 
 ```bash
 transition_key=$(cat /proc/sys/kernel/random/uuid)
-curl --fail-with-body \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body \
   --request PATCH \
   --header "Idempotency-Key: $transition_key" \
   --output /dev/null \
@@ -414,7 +542,7 @@ includes a missing item, so both failures are reported:
 
 ```bash
 transition_key=$(cat /proc/sys/kernel/random/uuid)
-curl --include \
+curl --config "$INVENTORY_CURL_CONFIG" --include \
   --request PATCH \
   --header "Idempotency-Key: $transition_key" \
   'http://localhost:8080/api/v1/inventory/status' \
@@ -454,7 +582,9 @@ returns `400` before lifecycle evaluation, with input errors only. The former
 `PATCH /api/v1/inventory/{serialNumber}/status` endpoint is removed; no API version is added.
 
 The required `Idempotency-Key` is one plain, canonical 36-character UUID v4 (either hex case),
-scoped globally to this endpoint. Missing, repeated or invalid keys return `400 VALIDATION_FAILED`.
+scoped to the verified `(issuer, subject)` identity for this endpoint. A renewed token or another
+approved interactive client for the same subject uses the same scope; different subjects may
+use the same UUID independently. Current caller/operation/target authorization runs before replay. Missing, repeated or invalid keys return `400 VALIDATION_FAILED`.
 Input validation finishes before checking the key. Equivalent payloads ignore JSON whitespace and
 property order, but preserve array order, serial-number case and requested status.
 
@@ -489,14 +619,15 @@ and `busy`; cleanup exposes `inventory.idempotency.cleanup.deleted`, `.failures`
 including those that later roll back. Monitor failures/backlog if cleanup falls behind. No key or
 serial-number metric labels are used.
 
-Deploy migration V3 before the coordinated endpoint cutover, update callers to send keys and drain
+The original V3 introduced the ledger; V5 now replaces its UUID-only identity with an authenticated
+composite key. Follow the security cutover procedure above when upgrading. Update callers to send keys and drain
 old instances. Mixed old/new application versions cannot provide the replay guarantee.
 
 Browse status history using the defaults `page=0`, `size=20`, `sort=timestamp`, and
 `direction=desc`:
 
 ```bash
-curl --fail-with-body \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body \
   'http://localhost:8080/api/v1/inventory-history'
 ```
 
@@ -505,7 +636,7 @@ Filter by a case-sensitive literal serial-number substring and sort by any of `s
 `statusFrom`, `statusTo`, or `timestamp` in either direction:
 
 ```bash
-curl --fail-with-body \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body \
   'http://localhost:8080/api/v1/inventory-history?page=0&size=20&serialNumber=DRILL&sort=statusFrom&direction=asc'
 ```
 
@@ -516,7 +647,7 @@ the corresponding inventory item is deleted.
 Fully replace its mutable values. The body serial number must match the path:
 
 ```bash
-curl --fail-with-body \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body \
   --request PUT 'http://localhost:8080/api/v1/inventory/DRILL-001' \
   --header 'Content-Type: application/json' \
   --data '{
@@ -530,7 +661,7 @@ curl --fail-with-body \
 Permanently delete it:
 
 ```bash
-curl --fail-with-body \
+curl --config "$INVENTORY_CURL_CONFIG" --fail-with-body \
   --request DELETE \
   --output /dev/null \
   --write-out '%{http_code}\n' \

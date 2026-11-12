@@ -2,10 +2,9 @@ package com.rentflow.model;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.UUID;
 import jakarta.persistence.Column;
+import jakarta.persistence.EmbeddedId;
 import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 
 import org.hibernate.annotations.JdbcTypeCode;
@@ -14,9 +13,8 @@ import org.hibernate.type.SqlTypes;
 @Entity
 @Table(name = "inventory_status_transition_requests", schema = "inventory")
 public class InventoryStatusTransitionRequest {
-    @Id
-    @Column(name = "idempotency_key", nullable = false)
-    private UUID key;
+    @EmbeddedId
+    private InventoryStatusTransitionRequestId id;
 
     @Column(nullable = false, length = 64)
     private String fingerprint;
@@ -36,8 +34,8 @@ public class InventoryStatusTransitionRequest {
 
     protected InventoryStatusTransitionRequest() {}
 
-    public InventoryStatusTransitionRequest(UUID key) {
-        this.key = key;
+    public InventoryStatusTransitionRequest(InventoryStatusTransitionRequestId id) {
+        this.id = id;
     }
 
     public void complete(String fingerprint, InventoryStatusTransitionOutcome outcome, Instant databaseTime) {

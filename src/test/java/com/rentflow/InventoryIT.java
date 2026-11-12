@@ -51,7 +51,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(print = org.springframework.boot.webmvc.test.autoconfigure.MockMvcPrint.NONE)
+@org.springframework.context.annotation.Import(com.rentflow.support.StaffHttpDefaults.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class InventoryIT extends PostgresIntegrationTest {
 
@@ -76,7 +77,7 @@ class InventoryIT extends PostgresIntegrationTest {
     }
 
     @Test
-    void createsAndRetrievesANormalizedItemWithoutCredentials() throws Exception {
+    void createsAndRetrievesANormalizedItemWithStaffCredentials() throws Exception {
         mockMvc.perform(post("/api/v1/inventory")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validRequest("DRILL-001", "  Industrial drill  ", "  Bosch GBH  ")))
@@ -146,7 +147,7 @@ class InventoryIT extends PostgresIntegrationTest {
 
     @Test
     void rejectsInvalidAndMissingSerialNumbers() throws Exception {
-        mockMvc.perform(get("/api/v1/inventory/%20bad%20"))
+        mockMvc.perform(get(URI.create("/api/v1/inventory/%20bad%20")))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
@@ -456,7 +457,7 @@ class InventoryIT extends PostgresIntegrationTest {
         mockMvc.perform(patch("/api/v1/inventory/status/status")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"status\":\"RENTED\"}"))
-                .andExpect(status().isNotFound());
+                .andExpect(status().isForbidden());
         mockMvc.perform(get("/api/v1/inventory/status"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.serialNumber").value("status"));
@@ -786,7 +787,7 @@ class InventoryIT extends PostgresIntegrationTest {
     }
 
     @Test
-    void returnsDefaultPageWithDeterministicOrderWithoutCredentials() throws Exception {
+    void returnsDefaultPageWithDeterministicOrderWithStaffCredentials() throws Exception {
         seedInventory();
 
         mockMvc.perform(get("/api/v1/inventory"))
@@ -1001,28 +1002,25 @@ class InventoryIT extends PostgresIntegrationTest {
                         mockMvc.perform(patch("/api/v1/inventory/DRILL-001")
                                 .contentType(MediaType.APPLICATION_JSON)
                                 .content(validationRequest("DRILL-001", "AVAILABLE"))),
-                        HttpStatus.METHOD_NOT_ALLOWED,
-                        "urn:rentflow:problem:method-not-allowed",
-                        "Method not allowed",
-                        "The HTTP method is not supported for this resource.",
+                        HttpStatus.FORBIDDEN,
+                        "urn:rentflow:problem:access-denied",
+                        "Access denied",
+                        "This operation is not permitted.",
                         "/api/v1/inventory/DRILL-001",
-                        "METHOD_NOT_ALLOWED")
+                        "ACCESS_DENIED")
                 .andReturn();
-        assertThat(patchResult.getResponse().getHeader(HttpHeaders.ALLOW))
-                .contains("GET")
-                .contains("PUT")
-                .contains("DELETE");
+        assertThat(patchResult.getResponse().getHeader(HttpHeaders.ALLOW)).isNull();
 
         expectProblem(
                 mockMvc.perform(post("/api/v1/inventory/DRILL-001")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validationRequest("DRILL-001", "AVAILABLE"))),
-                HttpStatus.METHOD_NOT_ALLOWED,
-                "urn:rentflow:problem:method-not-allowed",
-                "Method not allowed",
-                "The HTTP method is not supported for this resource.",
+                HttpStatus.FORBIDDEN,
+                "urn:rentflow:problem:access-denied",
+                "Access denied",
+                "This operation is not permitted.",
                 "/api/v1/inventory/DRILL-001",
-                "METHOD_NOT_ALLOWED");
+                "ACCESS_DENIED");
     }
 
     @Test
@@ -1049,11 +1047,11 @@ class InventoryIT extends PostgresIntegrationTest {
                 "INVENTORY_ITEM_ALREADY_EXISTS");
         assertThat(repository.findById("DRILL-001").orElseThrow().getStatus()).isEqualTo(InventoryStatus.AVAILABLE);
 
-        expectResourceNotFound("/api/v1/not-a-resource");
+        expectResourceDenied("/api/v1/not-a-resource");
     }
 
     @Test
-    void everyInventoryOperationIsReachableWithoutCredentials() throws Exception {
+    void everyInventoryOperationIsReachableWithStaffCredentials() throws Exception {
         mockMvc.perform(post("/api/v1/inventory")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validationRequest("NOAUTH-001", "AVAILABLE")))
@@ -1077,7 +1075,7 @@ class InventoryIT extends PostgresIntegrationTest {
     void authenticationAndAuthorizationCapabilitiesRemainUnmapped() throws Exception {
         for (String path :
                 new String[] {"/login", "/api/v1/token", "/api/v1/users", "/api/v1/roles", "/api/v1/permissions"}) {
-            expectResourceNotFound(path);
+            expectResourceDenied(path);
         }
     }
 
@@ -1268,15 +1266,15 @@ class InventoryIT extends PostgresIntegrationTest {
                 .andExpect(jsonPath("$.violations").doesNotExist());
     }
 
-    private void expectResourceNotFound(String path) throws Exception {
+    private void expectResourceDenied(String path) throws Exception {
         expectProblem(
                 mockMvc.perform(get(path)),
-                HttpStatus.NOT_FOUND,
-                "urn:rentflow:problem:resource-not-found",
-                "Resource not found",
-                "The requested resource was not found.",
+                HttpStatus.FORBIDDEN,
+                "urn:rentflow:problem:access-denied",
+                "Access denied",
+                "This operation is not permitted.",
                 path,
-                "RESOURCE_NOT_FOUND");
+                "ACCESS_DENIED");
     }
 
     private String validationRequest(String serialNumber, String status) {

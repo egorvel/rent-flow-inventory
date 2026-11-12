@@ -60,6 +60,10 @@ inventory:
         max-backoff: ${INVENTORY_CANCELLATION_MAX_BACKOFF:8s}
 
 springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
   paths-to-match: /api/v1/**
 
 management:
@@ -126,6 +130,7 @@ management:
         readiness:
           include: readinessState,db
       show-details: never
+      show-components: never
 
 logging:
   level:
@@ -156,13 +161,3 @@ jdbc:
       enable-logging: false
     slow-query:
       enable-logging: false
-
----
-spring:
-  config:
-    activate:
-      on-profile: local
-management:
-  tracing:
-    sampling:
-      probability: ${TRACING_SAMPLING_PROBABILITY:1.0}

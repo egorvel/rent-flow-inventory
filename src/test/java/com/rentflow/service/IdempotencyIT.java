@@ -43,7 +43,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(print = org.springframework.boot.webmvc.test.autoconfigure.MockMvcPrint.NONE)
+@org.springframework.context.annotation.Import(com.rentflow.support.StaffHttpDefaults.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 class IdempotencyIT extends PostgresIntegrationTest {
     private static final String PATH = "/api/v1/inventory/status";
@@ -213,7 +214,8 @@ class IdempotencyIT extends PostgresIntegrationTest {
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
         try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
             tx.executeWithoutResult(ignored -> {
-                assertThat(requests.tryExecutionLock(IdempotencyFingerprint.lockId(key)))
+                assertThat(requests.tryExecutionLock(
+                                IdempotencyFingerprint.lockId(IdempotentStatusTransitionService.callerScope(), key)))
                         .isTrue();
                 try {
                     executor.submit(() -> {
@@ -232,7 +234,9 @@ class IdempotencyIT extends PostgresIntegrationTest {
                 } catch (Exception exception) {
                     throw new AssertionError(exception);
                 }
-                assertThat(requests.existsById(key)).isFalse();
+                assertThat(requests.existsById(new com.rentflow.model.InventoryStatusTransitionRequestId(
+                                IdempotentStatusTransitionService.callerScope(), key)))
+                        .isFalse();
             });
         }
     }
@@ -287,6 +291,7 @@ class IdempotencyIT extends PostgresIntegrationTest {
                         "--spring.datasource.password=" + INVENTORY_PASSWORD,
                         "--logging.level.root=OFF",
                         "--spring.main.banner-mode=off")) {
+            com.rentflow.support.SignedJwtFixture.authenticateStaff();
             IdempotentStatusTransitionService.Result result = second.getBean(IdempotentStatusTransitionService.class)
                     .transition(key, List.of(new InventoryStatusTransition("A", InventoryStatus.RESERVED)));
             assertThat(result.replayed()).isTrue();
@@ -305,7 +310,9 @@ class IdempotencyIT extends PostgresIntegrationTest {
         TransactionTemplate tx = new TransactionTemplate(transactionManager);
         try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
             tx.executeWithoutResult(ignored -> {
-                requests.findForUpdateByKey(locked).orElseThrow();
+                requests.findForUpdateById(new com.rentflow.model.InventoryStatusTransitionRequestId(
+                                "legacy:unauthenticated", locked))
+                        .orElseThrow();
                 try {
                     assertThat(executor.submit(() -> cleanup.deleteChunk()).get(3, TimeUnit.SECONDS))
                             .isEqualTo(1000);
@@ -335,11 +342,43 @@ class IdempotencyIT extends PostgresIntegrationTest {
         assertThat(requests.count()).isZero();
     }
 
+    @Test
+    void heldExecutionLockDoesNotBlockAnotherSubjectUsingTheSameUuid() {
+        UUID key = UUID.randomUUID();
+        String firstScope = IdempotentStatusTransitionService.callerScope();
+        String otherSubject = com.rentflow.support.SignedJwtFixture.SHARED.token(
+                "independent-subject", "inventory-swagger", com.rentflow.support.SignedJwtFixture.STAFF);
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            tx.executeWithoutResult(ignored -> {
+                assertThat(requests.tryExecutionLock(IdempotencyFingerprint.lockId(firstScope, key)))
+                        .isTrue();
+                try {
+                    executor.submit(() -> {
+                                mvc.perform(patch(PATH)
+                                                .header("Authorization", "Bearer " + otherSubject)
+                                                .header("Idempotency-Key", key.toString())
+                                                .contentType(MediaType.APPLICATION_JSON)
+                                                .content(BODY))
+                                        .andExpect(status().isNoContent())
+                                        .andExpect(header().string("Idempotency-Replayed", "false"));
+                                return null;
+                            })
+                            .get(3, TimeUnit.SECONDS);
+                } catch (Exception error) {
+                    throw new AssertionError(error);
+                }
+            });
+        }
+        assertThat(requests.count()).isOne();
+        assertThat(history.count()).isOne();
+    }
+
     private void insertExpired(int count) {
         jdbc.update("""
                 INSERT INTO inventory.inventory_status_transition_requests
-                    (idempotency_key, fingerprint, http_status, outcome, recorded_at, expires_at)
-                SELECT md5(n::text)::uuid, repeat('a',64), 204, '{"status":204,"failedItems":[]}'::jsonb,
+                    (caller_scope, idempotency_key, fingerprint, http_status, outcome, recorded_at, expires_at)
+                SELECT 'legacy:unauthenticated', md5(n::text)::uuid, repeat('a',64), 204, '{"status":204,"failedItems":[]}'::jsonb,
                     statement_timestamp() - INTERVAL '8 days', statement_timestamp() - INTERVAL '1 day'
                 FROM generate_series(1, ?) n
                 """, count);

@@ -9,6 +9,10 @@ coherent authentication/authorization/replay cutover: splitting enforcement from
 replay would create an unsafe interim boundary. Review it as one change with focused tests.
 T2 and T3 build on T1; T4 is final Inventory acceptance. C1 is a separately requested Common commit,
 with its own repository rules, and is not a task to execute inside this repository.
+T5 is the user-approved 2026-11-11 metadata amendment after the original Inventory acceptance,
+including the subsequent explicit simplification to native Spring URL generation.
+T6 is the subsequent user-approved authorization policy/route-binding refactor with unchanged behavior.
+T7 is the user-approved 2026-11-12 refactor of per-operation security documentation.
 
 ```mermaid
 flowchart LR
@@ -16,7 +20,10 @@ flowchart LR
   T1 --> T3["T3: isolated container smoke"]
   T2 --> T4["T4: Inventory acceptance and cutover guide"]
   T3 --> T4
-  T4 --> C1["C1: Common policy and real-provider Phase 2 gate"]
+  T4 --> T5["T5: accurate public resource metadata"]
+  T5 --> T6["T6: config policy and typed route checks"]
+  T6 --> T7["T7: annotation-owned permission descriptions"]
+  T7 --> C1["C1: Common policy and real-provider Phase 2 gate"]
 ```
 
 Do not deploy an intermediate task commit as completed Phase 2. T1 changes the ledger primary
@@ -32,7 +39,7 @@ container/runtime configuration changes; no phase-specific suite waives a reposi
 
 **Depends on:** Agreed specification and an Inventory implementation request.
 
-**Refs.** `requirements.md` AC1.1, AC1.2, AC1.3, AC1.4, AC1.5, AC2.1, AC2.2, AC2.3,
+**Refs.** `requirements.md` AC1.1, AC1.2, AC1.3, AC1.4, AC1.5, AC1.6, AC2.1, AC2.2, AC2.3,
 AC2.4, AC2.5, AC3.1, AC3.2, AC3.3, AC3.4, AC3.5, AC4.1, AC4.2, AC4.3, AC4.4, AC4.5,
 AC4.6, AC5.1, AC5.2, AC5.3, AC5.4, AC6.2, AC6.3, AC6.5, AC7.1; `design.md` §1, §2,
 §3, §4, §5, §6, §7, §8.
@@ -50,6 +57,11 @@ signed-JWT/JWKS fixture. Keep docs disabled by default. Preserve internal Kafka 
   30s boundaries and role-structure types. Missing, duplicate, malformed, query/form-only tokens
   assert generic 401, proper challenges and zero business/replay access. Unknown roles, realm
   roles, other-resource roles and SCOPE_ authorities never satisfy local permissions.
+- Header-type tests accept JWT, jwt and mixed case while rejecting absent, blank and other
+  types; payload typ still requires exact Bearer. Composed built-ins preserve required expiry,
+  optional nbf, exact issuer, both audience representations and 30s clock boundaries. An
+  unexpired token issued more than 30s ago remains valid. Malformed claim shapes yield generic
+  401 without conversion exceptions, and decoder tests retain RS256-only signature enforcement.
 - Tests start the application with valid settings and unreachable JWKS, warm cached keys before
   outage, accept a known-key token while cached, reject an unknown kid within configured fetch
   bounds and refresh keys on recovery. Missing/invalid configuration fails startup. Keycloak
@@ -155,11 +167,103 @@ signed-JWT/JWKS fixture. Keep docs disabled by default. Preserve internal Kafka 
 - A final mvn -B -ntp clean verify reports BUILD SUCCESS and the adapted container smoke reports
   Container smoke verification passed; record dates, scope and unskipped suite counts.
 
+## T5 — Retain Spring's public protected-resource metadata
+
+**Commit:** feat: publish accurate inventory protected-resource metadata
+
+**Depends on:** T4 and the user's 2026-11-11 metadata implementation request, with their later explicit simplification superseding the fixed-origin decisions.
+
+**Refs.** `requirements.md` AC1.2, AC2.5, AC5.3, AC5.5, AC5.6, AC6.3, AC6.4, AC7.1,
+AC7.2; `design.md` §3, §6, §7.1, §8, §9.
+
+**DoD.**
+
+- The application retains Spring's metadata filter and uses supported metadata customization,
+  with no filter-list reconstruction. Real HTTP tests assert exactly resource,
+  authorization_servers, bearer_methods_supported=["header"] and
+  tls_client_certificate_bound_access_tokens=false; OAuth scopes and credential data are absent.
+  Root, trailing-slash, nested and encoded suffixes use Spring's effective request-derived
+  resource URL and omit query parameters. Tests assert the real listener origin and different
+  effective schemes/hosts/ports, retaining the exact four-field response checks.
+- Remove the public-origin environment/property settings from application/local YAML, Compose,
+  smoke overrides and test fixtures, together with URL rewriting and its startup validator.
+  Replace obsolete fixed-origin/validation tests with request-URL assertions. README documents
+  standard trusted proxy/forwarding deployment responsibilities and the issuer/audience
+  distinction without adding custom header processing or a new required setting.
+- Metadata GET tests with missing, valid, malformed and duplicate bearer headers return the
+  same public document, including during a JWKS outage with documentation disabled. Private
+  management discovery stays 403 with no challenge, non-GET/unrelated well-known requests stay
+  denied, and signed business/probe/docs regressions retain their authentication and permission
+  checks. Existing WWW-Authenticate headers remain exact and unchanged.
+- Update the former discovery-denial tests to assert the approved public protocol contract;
+  retain independent listener and business-denial assertions. The isolated container smoke
+  verifies configured metadata without removing runtime/outage/replay checks. Re-run the spec
+  checklist, mvn -B -ntp clean verify (BUILD SUCCESS, no skipped checks), and the container smoke
+  (Container smoke verification passed); record actual evidence in implementation-acceptance.md.
+
+## T6 — Separate capability policy, route selection and caller scoping
+
+**Commit:** refactor: bind inventory routes to a shared config authorization policy
+
+**Depends on:** T5 and the user's explicit authorization-refactor request.
+
+**Refs.** `requirements.md` AC1.1, AC1.2, AC2.1, AC2.2, AC2.4, AC2.5, AC3.1, AC3.2,
+AC3.3, AC3.5, AC4.1, AC4.2, AC4.3, AC6.3, AC7.1, AC7.2; `design.md` §1, §3.1, §4,
+§5, §6, §8.
+
+**DoD.**
+
+- InventoryAuthorizationPolicy lives in config as a plain class with unchanged capability
+  predicates and annotation-facing overloads. Its unconditional @Bean registration in
+  InventoryMethodSecurityConfig resolves in both servlet and non-web service contexts. All
+  service annotations use the new bean name. The former service class, generic authorize
+  dispatcher and HTTP-path/method parsing are removed; existing ArchUnit rules pass unchanged.
+- applicationSecurity binds its existing routes to typed callbacks for read/list/history/manage
+  and request-transition capabilities. Signed HTTP tests with single human permissions catch
+  incorrect route bindings and preserve 403 before malformed-body parsing for denied writes.
+  Existing customer/staff/machine, overgrant, target, HEAD/OPTIONS and unknown-route assertions
+  remain intact, as do exact 401/403/challenge and public metadata/probe/docs behavior.
+- callerScope lives in IdempotentStatusTransitionService with package visibility. A fixed
+  namespace/issuer/subject hash vector remains exact across approved clients, missing identity
+  is rejected, and existing equal-key/renewed-token/cross-client replay, lock and database
+  regression assertions pass. No migration or stored identity is changed.
+- Actual service proxies and non-web idempotency restart contexts retain authorization and
+  target checks, including before saved-result access. No service acquires a Java dependency on
+  config, and no policy is moved to util or given a repository dependency. Record a new spec
+  review, mvn -B -ntp clean verify (BUILD SUCCESS, no skipped checks) and the isolated container
+  smoke (Container smoke verification passed) in implementation-acceptance.md.
+
+## T7 — Attach permission documentation to controller operations
+
+**Commit:** refactor: document inventory permissions on controller operations
+
+**Depends on:** T6 and the user's explicit documentation-refactor request.
+
+**Refs.** `requirements.md` AC6.1, AC6.3, AC6.4, AC7.1; `design.md` §3, §4, §5, §6, §7, §8.
+
+**DoD.**
+
+- All seven business operations document their own permission and caller restrictions in their
+  existing @Operation descriptions. Preserve POST/PUT status-assignment semantics, PATCH's
+  existing business description, human-manage and Reservation-reserve alternatives, all-RESERVED
+  restriction and authorization before replay. The Idempotency-Key parameter describes verified
+  issuer/subject scope. No operationId switch or fallback permission description remains.
+- The existing OpenApiCustomizer retains both authentication schemes, both alternatives with
+  empty permission-scope lists and common 401/403 ProblemResponse/WWW-Authenticate documentation.
+  It does not rewrite descriptions. No new annotation/catalog abstraction or runtime policy,
+  filter-chain, service-security or dependency-boundary change is introduced.
+- OpenApiIT verifies permission/caller text for each HTTP method/path and the PATCH replay/key
+  contract, as well as shared scheme definitions and exact error documentation on all operations.
+  Existing business-schema, PKCE and runtime authorization assertions remain intact. Record a
+  spec self-evaluation and mvn -B -ntp clean verify with BUILD SUCCESS and no skipped checks in
+  implementation-acceptance.md. Container/runtime configuration is unchanged; prior container
+  acceptance remains separately dated evidence.
+
 ## C1 — Common policy and real-provider interoperability handoff
 
 **Commit (Common repository):** feat: provision and verify inventory human permissions
 
-**Depends on:** T4 and a separate Common-scoped implementation request. This is an external
+**Depends on:** T7 and a separate Common-scoped implementation request. This is an external
 Phase 2 completion gate; Inventory local acceptance may be reported before it, with this gate pending.
 
 **Refs.** `requirements.md` AC7.3, AC7.4; `design.md` §3, §7, §9.
@@ -188,17 +292,21 @@ T2/T3/C1 add configuration, container and real-provider evidence rather than rep
 | --- | --- |
 | AC1.1, AC1.2, AC1.3, AC1.4 | T1 signed-token, resolver and authority assertions |
 | AC1.5 | T1 startup/cache/outage/timeout and probe assertions |
+| AC1.6 | T1 required case-insensitive header type and unchanged payload-type assertions |
 | AC2.1, AC2.2, AC2.4, AC2.5 | T1 complete caller/permission/route matrix and proxied calls |
+| AC2.1, AC2.2, AC2.4, AC2.5, AC3.1, AC3.2, AC3.3, AC3.5 | T6 typed route bindings, single-permission early denials and unchanged proxy/target/machine checks |
 | AC2.3 | T1 arbitrary staff POST/PUT status/history regressions |
 | AC3.1, AC3.2, AC3.3, AC3.4, AC3.5 | T1 machine allowlist, overgrant, target and lifecycle assertions |
 | AC4.1, AC4.2, AC4.3 | T1 scoped persistence/locks, renewed/cross-client replay and authorization-before-replay |
+| AC4.1, AC4.2, AC4.3 | T6 fixed caller-scope vector, client stability, replay protection and non-web context assertions |
 | AC4.4 | T1 legacy migration/preservation and no-replay assertions |
 | AC4.5 | T1 cleanup by composite identity with equal UUIDs/mixed expiry |
 | AC4.6 | T1 transaction-failure/rollback and safe retry assertions |
 | AC5.1, AC5.2, AC5.3, AC5.4 | T1 actual listener, minimal probe, spoofing and statelessness assertions |
+| AC5.5, AC5.6 | T5 exact public metadata, native request-derived URLs, bearer/outage independence and listener/route isolation assertions |
 | AC6.1, AC6.2 | T2 local/default-disabled documentation and PKCE config assertions; T1 default denial |
 | AC6.3, AC6.5 | T1 exact filter/method denial contract and telemetry leakage assertions |
-| AC6.4 | T2 OpenAPI and README contract assertions |
+| AC6.4 | T2 OpenAPI and README contract assertions; T7 per-operation permission/caller/replay descriptions and shared security documentation |
 | AC7.1 | T1 isolated signed HTTP/proxy/PostgreSQL regression suites; T4 final evidence |
 | AC7.2 | T3 isolated smoke allow/deny/replay/runtime assertions; T4 final execution |
 | AC7.3 | C1 real-provider policy and API positive/negative assertions |

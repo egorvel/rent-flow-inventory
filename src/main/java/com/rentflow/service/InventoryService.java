@@ -9,6 +9,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,6 +55,7 @@ public class InventoryService {
     }
 
     @Transactional
+    @PreAuthorize("@inventoryAuthorizationPolicy.canManage()")
     public InventoryItem create(InventoryItem item) {
         if (repository.existsById(item.getSerialNumber())) {
             throw new InventoryItemAlreadyExistsException(item.getSerialNumber());
@@ -67,11 +69,13 @@ public class InventoryService {
     }
 
     @Transactional(readOnly = true)
+    @PreAuthorize("@inventoryAuthorizationPolicy.canRead()")
     public InventoryItem get(String serialNumber) {
         return repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
     }
 
     @Transactional
+    @PreAuthorize("@inventoryAuthorizationPolicy.canManage()")
     public InventoryItem replace(InventoryItem item) {
         InventoryItem resultItem = repository
                 .findById(item.getSerialNumber())
@@ -81,6 +85,7 @@ public class InventoryService {
     }
 
     @Transactional
+    @PreAuthorize("@inventoryAuthorizationPolicy.canManage()")
     public void delete(String serialNumber) {
         InventoryItem item =
                 repository.findById(serialNumber).orElseThrow(() -> new InventoryItemNotFoundException(serialNumber));
@@ -88,6 +93,7 @@ public class InventoryService {
     }
 
     @Transactional
+    @PreAuthorize("@inventoryAuthorizationPolicy.canTransition(#transitions)")
     public InventoryStatusTransitionOutcome transitionStatus(List<InventoryStatusTransition> transitions) {
         Observation observation = Observation.createNotStarted("inventory.status.transition", observationRegistry)
                 .highCardinalityKeyValue("batch.size", Integer.toString(transitions.size()))
@@ -192,6 +198,7 @@ public class InventoryService {
     }
 
     @Transactional(readOnly = true)
+    @PreAuthorize("@inventoryAuthorizationPolicy.canList()")
     public Page<InventoryItem> list(
             int page,
             int size,
@@ -208,6 +215,7 @@ public class InventoryService {
     }
 
     @Transactional(readOnly = true)
+    @PreAuthorize("@inventoryAuthorizationPolicy.canHistory()")
     public Page<InventoryStatusHistory> listStatusHistory(
             int page,
             int size,

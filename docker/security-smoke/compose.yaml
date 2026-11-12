@@ -1,0 +1,12 @@
+services:
+  security-fixture:
+    build:
+      context: ./docker/security-smoke
+    expose:
+      - "8089"
+  inventory:
+    environment:
+      SPRING_KAFKA_LISTENER_AUTO_STARTUP: "false"
+      SPRING_KAFKA_ADMIN_AUTO_CREATE: "false"
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://security-fixture:8089/realms/smoke
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://security-fixture:8089/realms/smoke/protocol/openid-connect/certs
