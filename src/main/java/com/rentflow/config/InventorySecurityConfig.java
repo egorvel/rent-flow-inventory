@@ -54,8 +54,8 @@ public class InventorySecurityConfig {
                 .jwsAlgorithm(SignatureAlgorithm.RS256)
                 .restOperations(new RestTemplate(factory))
                 .build();
-        MappedJwtClaimSetConverter claimConverter = MappedJwtClaimSetConverter.withDefaults(
-                Map.of(JwtClaimNames.SUB, value -> value, IdTokenClaimNames.AZP, value -> value));
+        MappedJwtClaimSetConverter claimConverter =
+                MappedJwtClaimSetConverter.withDefaults(Map.of());
         decoder.setClaimSetConverter(claims -> {
             // Check before default conversion can synthesize iat from exp.
             if (claims.get(JwtClaimNames.IAT) == null) {
