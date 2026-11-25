@@ -19,7 +19,6 @@ import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
-import org.springframework.security.oauth2.core.oidc.IdTokenClaimNames;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
 import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtClaimNames;
@@ -54,8 +53,7 @@ public class InventorySecurityConfig {
                 .jwsAlgorithm(SignatureAlgorithm.RS256)
                 .restOperations(new RestTemplate(factory))
                 .build();
-        MappedJwtClaimSetConverter claimConverter =
-                MappedJwtClaimSetConverter.withDefaults(Map.of());
+        MappedJwtClaimSetConverter claimConverter = MappedJwtClaimSetConverter.withDefaults(Map.of());
         decoder.setClaimSetConverter(claims -> {
             // Check before default conversion can synthesize iat from exp.
             if (claims.get(JwtClaimNames.IAT) == null) {

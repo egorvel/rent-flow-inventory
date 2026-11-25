@@ -1,10 +1,13 @@
 # Inventory HTTP security implementation tasks
 
-Status: Planned; no task below is implemented by the specification request.
+Status: T1–T7 implemented in Inventory. Common C1 delivered in a510b07 on 2026-11-12;
+subsequent Pricing/Reservation rollout and combined acceptance recorded through 2026-11-24.
+Reviewed on 2026-11-25; see the verification status and test references below and `design.md` §9
+for evidence boundaries and deployment limits.
 
 ## Delivery rules and dependencies
 
-Each task is one safe commit. Inventory implementation requires a separate request. T1 is the
+Each task describes one safe commit; implementation was separately authorized. T1 is the
 coherent authentication/authorization/replay cutover: splitting enforcement from identity-scoped
 replay would create an unsafe interim boundary. Review it as one change with focused tests.
 T2 and T3 build on T1; T4 is final Inventory acceptance. C1 is a separately requested Common commit,
@@ -199,7 +202,7 @@ AC7.2; `design.md` §3, §6, §7.1, §8, §9.
   retain independent listener and business-denial assertions. The isolated container smoke
   verifies configured metadata without removing runtime/outage/replay checks. Re-run the spec
   checklist, mvn -B -ntp clean verify (BUILD SUCCESS, no skipped checks), and the container smoke
-  (Container smoke verification passed); record actual evidence in implementation-acceptance.md.
+  (Container smoke verification passed); update the verification status and test references below.
 
 ## T6 — Separate capability policy, route selection and caller scoping
 
@@ -231,7 +234,7 @@ AC3.3, AC3.5, AC4.1, AC4.2, AC4.3, AC6.3, AC7.1, AC7.2; `design.md` §1, §3.1, 
   target checks, including before saved-result access. No service acquires a Java dependency on
   config, and no policy is moved to util or given a repository dependency. Record a new spec
   review, mvn -B -ntp clean verify (BUILD SUCCESS, no skipped checks) and the isolated container
-  smoke (Container smoke verification passed) in implementation-acceptance.md.
+  smoke (Container smoke verification passed) in the verification status below.
 
 ## T7 — Attach permission documentation to controller operations
 
@@ -256,15 +259,20 @@ AC3.3, AC3.5, AC4.1, AC4.2, AC4.3, AC6.3, AC7.1, AC7.2; `design.md` §1, §3.1, 
   contract, as well as shared scheme definitions and exact error documentation on all operations.
   Existing business-schema, PKCE and runtime authorization assertions remain intact. Record a
   spec self-evaluation and mvn -B -ntp clean verify with BUILD SUCCESS and no skipped checks in
-  implementation-acceptance.md. Container/runtime configuration is unchanged; prior container
+  the verification status below. Container/runtime configuration is unchanged; prior container
   acceptance remains separately dated evidence.
 
 ## C1 — Common policy and real-provider interoperability handoff
 
 **Commit (Common repository):** feat: provision and verify inventory human permissions
 
-**Depends on:** T7 and a separate Common-scoped implementation request. This is an external
-Phase 2 completion gate; Inventory local acceptance may be reported before it, with this gate pending.
+**Status:** Completed by Common commit a510b07 (2026-11-12); reviewed against current Common
+HEAD 75afd1f on 2026-11-25. Common SECURITY_SPEC.md §15 records the original Inventory gate;
+§16/§17 record subsequent authenticated callers and combined acceptance. Current verification
+results and test references are maintained below.
+
+**Depends on:** T7 and the separately authorized Common implementation. Inventory-local
+acceptance preceded this external Phase 2 gate; it is no longer pending in the reviewed checkout.
 
 **Refs.** `requirements.md` AC7.3, AC7.4; `design.md` §3, §7, §9.
 
@@ -278,36 +286,55 @@ Phase 2 completion gate; Inventory local acceptance may be reported before it, w
   Inventory's direct setup/read/list/claim checks and all negative checks named in the handoff,
   including forbidden-target and permission-reduced replay with unchanged denied-write state.
   No password grant or token diagnostics are introduced for test convenience.
-- Common's direct Inventory smoke requests use intended identities; unchanged caller workflows
-  are explicitly pending, and Phase 2 evidence is labeled accordingly. No Common Compose change
-  is made unless its complete required suite can report Combined container smoke verification
-  passed; otherwise defer affected Compose changes and use existing injection/test overrides.
+- Common's direct Inventory smoke requests and subsequent Pricing/Reservation workflows use
+  intended identities. Label scoped Phase 2, later caller and full combined evidence separately;
+  keep pending status only while a caller has not adopted Client Credentials. Common Compose
+  changes require Combined container smoke verification passed; the recorded 2026-11-24 run
+  supplies that completed gate on disposable storage, without waiving future runs or Phase 5/7.
 
-## Acceptance-criteria traceability
+## Regression test entry points
 
 Each T1 DoD assertion group corresponds to the exact behavior in its cited design sections;
 T2/T3/C1 add configuration, container and real-provider evidence rather than replacing T1 tests.
 
-| Acceptance criteria | Task with regression-sensitive DoD |
+Test classes below live under src/test/java/com/rentflow; Common scripts run from Common's root.
+
+| Acceptance criteria | Task with regression-sensitive DoD | Test entry points |
+| --- | --- | --- |
+| AC1.1, AC1.2, AC1.3, AC1.4 | T1 signed-token, resolver and authority assertions | SecurityIT.validatesRealSignaturesAlgorithmsTokenTypesAndAllRequiredClaims; rejectsMissingMalformedDuplicateAndNonHeaderCredentialsWithSafeChallenges; converter/InventoryAuthorityConverterTest |
+| AC1.5 | T1 startup/cache/outage/timeout and probes | config/InventorySecurityConfigTest.createsDecoderWithoutNetworkAndUsesCachedKeysDuringOutageThenRefreshes; ObservabilityIT |
+| AC1.6 | T1 case-insensitive header and exact payload type | config/InventoryJwtValidatorTest; SecurityIT.acceptsCaseInsensitiveRequiredJwtHeaderAndPreservesPayloadTypeAndOlderTokenValidation |
+| AC2.1, AC2.2, AC2.4, AC2.5 | T1 caller/permission/route matrix and proxies; T6 typed early checks | SecurityIT.enforcesHumanMachineAndRoutePermissionMatrixEvenWithAccidentalOvergrants; bindsEachRouteToItsSpecificCapabilityBeforeBodyValidation; proxied-service tests |
+| AC2.3 | T1 arbitrary staff POST/PUT status without history | InventoryIT create/replace status/history assertions |
+| AC3.1, AC3.2, AC3.3, AC3.4, AC3.5 | T1/T6 machine allowlists, overgrants, target and lifecycle checks | SecurityIT caller matrix and rejectsForbiddenReservationTargetsBeforeReplayLocksOrItemMutation; InventoryIT batch matrix; scripts/container-smoke-test.sh |
+| AC4.1, AC4.2, AC4.3 | T1/T6 scoped storage/locks, stable identity and authorization before replay | SecurityIT.isolatesEqualKeysAcrossSubjectsAndRechecksPermissionsBeforeSavedResults; service/IdempotencyIT.heldExecutionLockDoesNotBlockAnotherSubjectUsingTheSameUuid; IdempotentStatusTransitionServiceTest caller-scope vectors and non-web restart/replay tests |
+| AC4.4 | T1 legacy migration/preservation and no replay | SecurityMigrationIT.upgradesLegacyLedgerWithoutLosingOutcomesOrOtherServiceObjects; SecurityIT legacy isolation |
+| AC4.5 | T1 composite cleanup with equal UUIDs/mixed expiry | SecurityIT.cleansOnlyExpiredCompositeRowsAndNeverReplaysLegacyResults; service/IdempotencyIT cleanup/chunk/locking assertions |
+| AC4.6 | T1 rollback and safe retry | InventoryIT and service/IdempotencyIT injected persistence failures |
+| AC5.1, AC5.2, AC5.3, AC5.4 | T1 real listeners, probes, spoofing and statelessness | SecurityIT.isolatesRealManagementListenerAndDisablesDocs; credential/session/method denials; ObservabilityIT; scripts/container-smoke-test.sh |
+| AC5.5, AC5.6 | T5 exact metadata/native URLs and listener isolation | SecurityIT.publishesAccuratePublicMetadataUsingRequestUrlsAndNativeResourcePaths; publicMetadataDoesNotAuthenticateCredentialsOrContactUnavailableProvider; metadataNonGetMethodsRetainNormalAuthenticationAndDenyRules |
+| AC6.1, AC6.2 | T2 local/default-disabled docs and PKCE; T1 default denial | OpenApiIT.exposesPkceConfigurationWithoutSecretsOrPersistentAuthorization; SecurityIT real-listener docs checks |
+| AC6.3, AC6.5 | T1/T6 exact filter/method denials and bounded telemetry | SecurityIT.deniesDoNotLeakCredentialsOrBodiesAndUseOnlyBoundedMetricLabels; proxied-service denials; ObservabilityIT.securityDenialTracesExcludeCredentialsBodiesAndAuthorizationDetails |
+| AC6.4 | T2/T7 OpenAPI/README contract | OpenApiIT.documentsEachOperationsPermissionsCallersAndReplayScope; documentsSharedAuthenticationAlternativesAndSecurityResponses |
+| AC7.1 | T1 isolated signed/proxy/database verification; T4 final evidence | Full mvn -B -ntp clean verify lifecycle, including SecurityIT, migration and real-broker suites |
+| AC7.2 | T3/T4 isolated container/runtime/replay and cleanup | scripts/container-smoke-test.sh; INVENTORY_SMOKE_FAIL_AFTER_SETUP=1 cleanup check |
+| AC7.3 | C1 real-provider policy and API assertions | Common scripts/security-smoke-test.sh --inventory and scripts/security/inventory_check.py |
+| AC7.4 | T4/C1 phased rollout and combined gate | README cutover guide; design.md §9; Common scripts/container-smoke-test.sh |
+
+## Verification status
+
+Keep this summary current rather than appending a per-refactor execution history. Runtime
+contracts belong in requirements/design, operational instructions in README, and test behavior
+in the executable suites above.
+
+| Gate | Latest recorded result |
 | --- | --- |
-| AC1.1, AC1.2, AC1.3, AC1.4 | T1 signed-token, resolver and authority assertions |
-| AC1.5 | T1 startup/cache/outage/timeout and probe assertions |
-| AC1.6 | T1 required case-insensitive header type and unchanged payload-type assertions |
-| AC2.1, AC2.2, AC2.4, AC2.5 | T1 complete caller/permission/route matrix and proxied calls |
-| AC2.1, AC2.2, AC2.4, AC2.5, AC3.1, AC3.2, AC3.3, AC3.5 | T6 typed route bindings, single-permission early denials and unchanged proxy/target/machine checks |
-| AC2.3 | T1 arbitrary staff POST/PUT status/history regressions |
-| AC3.1, AC3.2, AC3.3, AC3.4, AC3.5 | T1 machine allowlist, overgrant, target and lifecycle assertions |
-| AC4.1, AC4.2, AC4.3 | T1 scoped persistence/locks, renewed/cross-client replay and authorization-before-replay |
-| AC4.1, AC4.2, AC4.3 | T6 fixed caller-scope vector, client stability, replay protection and non-web context assertions |
-| AC4.4 | T1 legacy migration/preservation and no-replay assertions |
-| AC4.5 | T1 cleanup by composite identity with equal UUIDs/mixed expiry |
-| AC4.6 | T1 transaction-failure/rollback and safe retry assertions |
-| AC5.1, AC5.2, AC5.3, AC5.4 | T1 actual listener, minimal probe, spoofing and statelessness assertions |
-| AC5.5, AC5.6 | T5 exact public metadata, native request-derived URLs, bearer/outage independence and listener/route isolation assertions |
-| AC6.1, AC6.2 | T2 local/default-disabled documentation and PKCE config assertions; T1 default denial |
-| AC6.3, AC6.5 | T1 exact filter/method denial contract and telemetry leakage assertions |
-| AC6.4 | T2 OpenAPI and README contract assertions; T7 per-operation permission/caller/replay descriptions and shared security documentation |
-| AC7.1 | T1 isolated signed HTTP/proxy/PostgreSQL regression suites; T4 final evidence |
-| AC7.2 | T3 isolated smoke allow/deny/replay/runtime assertions; T4 final execution |
-| AC7.3 | C1 real-provider policy and API positive/negative assertions |
-| AC7.4 | T4 rollout-guide gate assertions and C1 explicit pending-workflow reporting |
+| Inventory Maven lifecycle | 2026-11-25: BUILD SUCCESS; 106 unit/architecture and 203 integration tests, zero failures/errors/skips; Spotless clean |
+| Inventory isolated container smoke | 2026-11-11: Container smoke verification passed, including signed caller/replay checks, native metadata, private metrics, restart, DB outage/recovery, retained-volume recreation and cleanup; intentional-failure cleanup also verified during initial acceptance |
+| Common real-provider Inventory gate | 2026-11-25: Keycloak foundation smoke verification passed and Inventory security interoperability verification passed; smoke containers/volumes/networks and temporary credentials removed |
+| Common full combined gate | Recorded by Common SECURITY_SPEC.md §17 on 2026-11-24: Combined container smoke verification passed; reviewed rather than rerun during the 2026-11-25 Inventory review |
+
+The Common rerun used disposable rentflow-security-smoke resources and checked-free ports;
+developer realm/state was not modified. Existing-realm policy application, existing-data cutover
+and broader operational/production-hardening obligations remain as described in `design.md` §9
+and README. Historical implementation changes and verification records remain available in Git.

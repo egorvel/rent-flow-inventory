@@ -1,14 +1,17 @@
 # Inventory HTTP security requirements
 
-Status: Specification agreed on 2026-11-08; implementation pending.
+Status: Inventory implemented; Common C1 delivered on 2026-11-12 and integrated caller rollout
+recorded through 2026-11-24. Reviewed on 2026-11-25; see `design.md` §9 and `tasks.md`
+for evidence boundaries and deployment limits.
 
 ## Context
 
-Inventory is Phase 2 of the [RentFlow security plan](../../../SECURITY_PLAN.md).
+Inventory is a stateless JWT resource server for the equipment catalogue.
 [Common's security contract](../../../rent-flow-common/SECURITY_SPEC.md) supplies Keycloak,
-issuer/audience conventions, interactive clients and two distinct machine identities. Inventory
-currently has no HTTP authentication, bans Spring Security in Maven and ArchUnit, and stores
-status-change results under endpoint-global idempotency keys.
+issuer/audience conventions, interactive clients and two distinct machine identities. The
+pre-feature baseline had no HTTP authentication, banned Spring Security in Maven and ArchUnit,
+and stored status-change results under endpoint-global idempotency keys. Inventory now enforces
+the contract below, and Common provisions its human grants and both authenticated machine callers.
 
 This feature makes Inventory a stateless JWT resource server. Customers can browse the catalogue;
 staff can administer it. Pricing can retrieve a single item, and Reservation can claim available
@@ -116,3 +119,5 @@ As a maintainer, I want reproducible evidence and an explicit boundary between I
 9. **Public resource metadata (2026-11-11, simplified by explicit user request).** Resolution: retain Spring's RFC 9728 filter and native request-derived resource URLs, including path-suffixed discovery. Customize only the trusted issuer and certificate-bound-token support=false; retain header bearer presentation, omitted OAuth scopes and existing WWW-Authenticate headers. Remove the previous public-origin setting, validation and URL rewriting. Proxy trust and effective external URL handling use Spring Boot's deployment configuration. Metadata GETs deliberately precede bearer validation; business routes retain all checks. See `design.md` §7.1 and `tasks.md` T5.
 10. **Authorization structure (2026-11-11).** Resolution: move capability decisions to InventoryAuthorizationPolicy in config, register it unconditionally for HTTP and method security, and bind typed per-route checks directly in applicationSecurity. Remove the generic HTTP dispatcher; keep callerScope in IdempotentStatusTransitionService with the identical hash contract. Preserve all caller/permission/target rules, early HTTP denials, method/replay protection and existing dependency boundaries. This refactor adds no new behavioral acceptance criteria. See `design.md` §3.1 and §5 and `tasks.md` T6.
 11. **Operation security documentation (2026-11-12).** Resolution: place permission and caller descriptions in each controller method's existing @Operation annotation, including PATCH target restrictions and authorization before scoped replay. Remove operationId-based description selection and its default permission assumption. Keep authentication schemes, both scheme alternatives and common 401/403 documentation centralized. These annotations describe the existing policy; runtime authorization remains unchanged. See `design.md` §7 and §8 and `tasks.md` T7.
+12. **Common implementation review (2026-11-25).** Resolution: Common has completed Inventory C1 and subsequently restored authenticated Pricing/Reservation workflows and recorded combined-smoke acceptance. Retain dated source/verification evidence rather than treating the former pending rollout as current. Local-profile issuer/JWKS defaults now match Common; other profiles still require explicit configuration. Broader Phase 5/7 and existing-data cutover obligations remain separate. See `design.md` §2 and §9 and `tasks.md` C1.
+13. **Subject representation (2026-11-25).** Resolution: rely on standard decoder processing of sub and retain the nonblank decoded-subject check. Remove the original-JSON-string restriction and the corresponding conformance follow-up. The user's explicit decision adds no representation-specific acceptance criteria or tests. See `design.md` §2.

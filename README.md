@@ -164,11 +164,15 @@ explicit Common registration update. API calls remain protected when documentati
 No Inventory CORS allowance is needed for same-origin Swagger. Additional API tools must use an
 approved client registration; ID and refresh tokens are not API credentials.
 
-**Common handoff remains pending:** its current foundation starts human composites empty. The
-Common owner must provision CUSTOMER read/list, STAFF read/list/manage/history, and matching
-interactive scope mappings using its existing policy plan/apply workflow. Until then, human
-login can succeed while Inventory correctly returns 403. Existing machine grants remain narrow.
-The Common real-provider Phase 2 gate is separate from Inventory's signed-fixture acceptance.
+**Common handoff is implemented:** its declarative policy grants CUSTOMER read/list and STAFF
+read/list/manage/history through the approved interactive scopes. Pricing and Reservation now
+authenticate their Inventory calls with their own narrow machine credentials. Common records
+Inventory interoperability acceptance on 2026-11-12 and complete authenticated combined-smoke
+acceptance on 2026-11-24; see [Common's security contract](../rent-flow-common/SECURITY_SPEC.md).
+Existing realms still require explicit policy reconciliation; startup import does not update
+their grants. Inventory's local fixture tests, real-provider checks and combined acceptance
+remain distinct evidence. See the [verification status](.specs/security/tasks.md#verification-status)
+and [rollout limits](.specs/security/design.md#9-common-handoff-and-rollout).
 
 For the shell examples below, set `INVENTORY_CURL_CONFIG` to a private mode-0600 file prepared
 by your API tool or editor, containing a curl `header = "Authorization: Bearer <access-token>"`
@@ -210,10 +214,11 @@ telemetry. These diagnostics are not a durable audit log.
 3. Callers use fresh keys after cutover and reconcile uncertain pre-cutover operations. Old
    results cannot be attributed safely and are unavailable for authenticated replay; reusing an
    old UUID is a new execution. Legacy rows retain their expiry and normal cleanup removes them.
-4. Validate Inventory's Maven and container suites, then perform Common's separately scoped
-   human-policy and real-provider checks. Until Pricing and Reservation add outbound Client
-   Credentials in Phases 3/4, their Inventory workflows are explicitly pending. Keep Inventory
-   enforcement intact; do not forward human tokens or claim full combined acceptance.
+4. Validate Inventory's Maven and container suites and Common's real-provider/combined checks
+   against the intended deployment. Pricing and Reservation's Client Credentials adoption and
+   combined disposable-storage acceptance are implemented; keep Inventory enforcement intact
+   and never forward human tokens as machine credentials. Recorded smoke success does not
+   replace existing-data cutover verification.
 5. Rollback requires coordinated schema/data restoration and a compatible application artifact,
    with post-backup writes reconciled. Do not run an old UUID-only binary against the migrated
    ledger. Common's final combined smoke, Phase 5 operational checks and Phase 7 production
@@ -223,7 +228,8 @@ The isolated Inventory smoke uses a test-only Python signing fixture with pinned
 no host crypto installation, fresh in-memory RSA keys and private temporary curl configuration.
 It never reads the developer's realm, publishes no signer port and cleans only its own project.
 `INVENTORY_SMOKE_FAIL_AFTER_SETUP=1 ./scripts/container-smoke-test.sh` exercises failed-run cleanup.
-See `.specs/security/implementation-acceptance.md` for the implementation/evidence map.
+See the [security test references](.specs/security/tasks.md#regression-test-entry-points) for the
+acceptance-criteria-to-test map.
 
 ## Database Ownership
 

@@ -1,10 +1,11 @@
 # Inventory HTTP security design
 
-Status: Agreed specification, 2026-11-08; implementation pending.
+Status: Inventory implemented; Common C1 and authenticated caller integration delivered.
+Reviewed on 2026-11-25; §9 distinguishes recorded acceptance from verification rerun here.
 
 ## 1. Scope, baseline and dependencies
 
-This is Inventory's Phase 2 design under the [global plan](../../../SECURITY_PLAN.md) and
+This design implements `requirements.md` using the
 [Common contract](../../../rent-flow-common/SECURITY_SPEC.md). It changes the HTTP trust
 boundary and status-request key scope. Earlier service-skeleton, status-transition and
 observability specs remain authoritative for business behavior except their unauthenticated
@@ -41,7 +42,7 @@ arbitrarily. Multiple token mechanisms cannot select a different identity.
 | Payload type | typ exactly Bearer; ID/refresh token shapes fail |
 | Issuer | Exact configured issuer string, nonblank; no alternate localhost/master/dev issuer |
 | Audience | inventory-api is a member of a nonempty string or array-of-strings aud; reject other types |
-| Identity | Nonblank string sub and azp |
+| Identity | Nonblank decoded sub; nonblank string azp |
 | Time | Numeric iat and exp required; exp later than iat; iat no later than now + 30s; exp and optional numeric nbf validated with exactly 30s skew |
 | Role structure | If resource_access, this API's entry, or its roles is present with an incompatible type, reject the token; absent roles means zero permissions |
 
@@ -52,12 +53,15 @@ is still invalid. No realm, permission or provider provisioning change follows f
 
 Compose Spring Security 7.1.0's JwtIssuerValidator, JwtAudienceValidator,
 JwtTimestampValidator and JwtTypeValidator("JWT") with JwtClaimValidator predicates for
-nonblank string sub/azp, exact payload typ and required, non-future iat. Configure the timestamp
+nonblank decoded sub and nonblank string azp, exact payload typ and required, non-future iat. Configure the timestamp
 validator with the injected clock, 30s skew, required exp and optional nbf. JwtTypeValidator's
 constructor requires the header; do not use the jwt() factory, which permits an absent header.
 Retain claim-shape guards and the Keycloak role-structure check. Normalize a scalar aud to a
 singleton collection before audience validation, preserving both supported JSON representations
 and rejection of malformed types without leaking conversion exceptions.
+
+Subject handling follows standard decoder processing. There is no additional requirement on
+the original JSON representation of sub; validate the decoded subject for nonblank content.
 
 The decoder already verifies signatures and its RS256-only algorithm policy; do not repeat that
 algorithm comparison in the claim validator. Spring's token model already rejects exp <= iat
@@ -91,9 +95,11 @@ Configure spring.security.oauth2.resourceserver.jwt.issuer-uri and an explicit m
 jwk-set-uri ending in /protocol/openid-connect/certs. Require both values, validate their URL
 shape at startup and retain exact issuer validation in the decoder. Require absolute URLs without
 userinfo, query or fragment and the JWKS URL to equal the issuer plus that exact suffix.
-There is no development issuer
-fallback. HTTP is allowed only for the documented local/smoke issuer topology; deployed settings
-must use HTTPS. Inventory requires no client secret. Local values are:
+The explicitly selected local profile supplies the following canonical development defaults in
+application-local.yaml; environment variables or command-line properties can override them.
+Other profiles have no issuer/JWKS fallback and must supply both settings. HTTP is allowed only
+for the documented local/smoke issuer topology; deployed settings must use HTTPS. Inventory
+requires no client secret. Local values are:
 
 - Issuer: http://auth.rentflow.test:8180/realms/rentflow-local.
 - JWKS: http://auth.rentflow.test:8180/realms/rentflow-local/protocol/openid-connect/certs.
@@ -117,7 +123,7 @@ revocation or reauthorize old JWTs by calling Keycloak per request.
 
 ## 3. Permission matrix and HTTP rules
 
-Human role composites proposed for Common:
+Human role composites provisioned by Common:
 
 | Business role | Inventory client roles |
 | --- | --- |
@@ -327,6 +333,11 @@ adding identity labels. These diagnostics are not a durable audit trail. Do not 
 TRACE/DEBUG or credential-bearing HTTP logging in normal profiles. Synthetic-marker tests inspect
 responses, captured logs, spans and new metric labels for credential/identity/body leakage.
 
+InventoryMethodSecurityConfig uses SecurityObservationSettings.noObservations() to avoid
+framework method-authorization detail spans and changes to existing business-span parentage.
+Keep the bounded Inventory denial metric/diagnostic and existing HTTP/business/JDBC observations
+active. This setting does not disable authorization or the application's observability.
+
 ## 7. Filter chains, operations and Swagger
 
 Select chains by actual server/listener identity, not Host or X-Forwarded-* headers. The management
@@ -521,48 +532,72 @@ runs the required full Maven lifecycle but does not claim future security checks
 
 ## 9. Common handoff and rollout
 
-No Common file or active realm is changed by this specification request. The following is a
-separate Common-owned implementation dependency, not authorization to mutate a sibling project.
+Common owns provider policy and caller deployment. The 2026-11-25 Inventory review reads its
+implementation and runs only disposable security-smoke verification; it does not edit Common
+files, apply policy to the developer realm, reset fixtures or rotate development credentials.
 
-| Common artifact/policy | Phase 2 change |
+| Common artifact/policy | Provisioned Inventory contract |
 | --- | --- |
-| inventory-api client roles | Retain read/reserve; add list/manage/history |
-| CUSTOMER composite | Add read/list only |
-| STAFF composite | Add read/list/manage/history only |
+| inventory-api client roles | read, reserve, list, manage, history |
+| CUSTOMER composite | read/list only |
+| STAFF composite | read/list/manage/history only |
 | inventory-swagger default audience scope | Expose only read/list/manage/history through explicit role scope mappings |
 | rentflow-pkce-check inventory-access optional scope | Expose the same human roles for the requested inventory-api audience |
 | pricing-service | Keep exactly inventory-api audience and inventory:read |
 | reservation-service | Keep exactly inventory-api audience and inventory:reserve |
-| Verification expectations and walkthrough | Replace empty Inventory human composites with this explicit matrix; other APIs' policies stay unchanged |
+| Verification expectations and walkthrough | Independently assert the exact Inventory matrix; Pricing/Reservation have their separately approved API policies |
 
 Disable Full Scope Allowed as today, and ensure human scopes exclude reserve and machine scopes
 exclude list/manage/history. Inventory:read in a Pricing token still does not allow listing.
-Apply the desired policy using Common's existing plan/apply tooling; do not rotate secrets,
-reset fixtures, alter subjects or reset the realm. Verify real browser PKCE customer/staff tokens
+Apply future policy changes using Common's existing plan/apply tooling; do not rotate secrets,
+reset fixtures, alter subjects or reset the realm as part of ordinary policy reconciliation.
+Verify real browser PKCE customer/staff tokens
 and Client Credentials machine tokens against secured Inventory in an isolated environment.
 Direct staff setup, customer read/list, Pricing lookup and Reservation claim must pass; customer
 administration/history, Pricing list/write/history, Reservation other targets/read/write/history,
 and insufficient-permission replay must fail. Compare before/after state on denied writes.
 
-Supply issuer/JWKS settings through existing environment injection or temporary test overrides
-without changing Common Compose during the intermediate broken-caller period. Common's direct
-Inventory setup/read calls must acquire appropriate test identities. Mark unchanged Pricing and
-Reservation application workflows pending: they send no machine credentials until Phases 3 and
-4. Never make Inventory anonymous, accept user forwarding, or fake final combined acceptance to
-restore those flows. Defer affected Common Compose changes if its required complete suite cannot
-pass; Phase 2 checks do not substitute for Combined container smoke verification passed. Phase 4
-restores the final combined gate, and Phase 5 adds full integrated operational/rotation evidence.
+The intermediate broken-caller period is over in the reviewed Common checkout. Its base Compose
+supplies the canonical issuer/JWKS settings to all three APIs. Pricing and Reservation acquire
+their own Client Credentials tokens for Inventory, each receiving only its own read-only,
+UID 10001-readable config-tree secret recipient. Inventory receives no client secret. Keep
+human bearer tokens and X-User headers out of downstream authentication, and retain the existing
+Kafka trust boundary for cancellation/expiry releases.
+
+Reviewed delivery evidence in [Common's security contract](../../../rent-flow-common/SECURITY_SPEC.md):
+
+- Common commit a510b07, §15 (2026-11-12), completes Inventory C1: declarative human grants,
+  exact machine restrictions, policy upgrade/no-op reapply, preserved identity/credential state,
+  real browser PKCE, denied-write invariants, native metadata and identity-scoped replay.
+- Commit c33d64a, §16 (2026-11-17), records Pricing's authenticated Inventory lookups, application
+  token reuse/renewal and provider/downstream failure handling. Its scoped run alone did not
+  claim combined acceptance.
+- Commit 75afd1f, §17 (2026-11-24), wires Reservation's authenticated claims and records
+  Combined container smoke verification passed on fresh disposable storage, including authenticated
+  cancellation/expiry, retained-volume recreation and observability. This supersedes the older
+  pending-Phase-3/4 statements; those earlier dated records remain historical.
+
+The 2026-11-25 review reran Common's --inventory real-provider gate and Inventory's Maven
+lifecycle; current results and test entry points are recorded in `tasks.md`. It does not
+claim a new combined-smoke run or proof that an existing developer/deployed realm has been
+reconciled. Existing realms need explicit Common policy application; startup import skips them.
+Future Common Compose changes still require the complete combined-smoke gate. Phase 2-only
+checks never substitute for that gate, and broader Phase 5 operational/signing-key rotation
+and Phase 7 production hardening remain separately required.
 
 Metadata URLs use the effective request URL as described in §7.1. Deployments with reverse
 proxies must configure trusted forwarding and HTTPS correctly through standard Spring Boot and
 ingress settings; there is no additional Inventory public-origin environment variable to supply.
 No Common file or active proxy configuration is changed by this Inventory task.
 
-Inventory implementation may report its own local acceptance separately from pending Common
-interoperability and cross-service workflows. A release record must distinguish all three. For
-deployed environments requiring continuity, coordinate authenticated callers before Inventory
-enforcement; the accepted local rollout permits the temporary integration interruption. Phase 7
-production hardening remains a deployment prerequisite, not a claim supplied by this feature.
+Inventory-local, Common real-provider and full combined acceptance remain distinct dated evidence.
+Coordinate existing-data cutover before deployment: Inventory's V5 rules in §5 still apply, and
+Reservation's destructive V6 upgrade is a separate Common/Reservation deployment obligation.
+Successful disposable-storage tests do not prove production-data migration safety.
+
+The earlier subject-representation follow-up is closed by the user's explicit removal of the
+original-JSON-string restriction. Section 2 retains validation of the decoded subject without
+adding representation-specific requirements or tests.
 
 ## 10. Traceability and technical references
 
